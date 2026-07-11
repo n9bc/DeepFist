@@ -14,8 +14,9 @@ dist/
 *.wav
 
 # ML artifacts / data (keep the repo light; datasets are generated on the fly)
-data/
-datasets/
+# Anchored to repo root so the deepfist/data and tests/data source packages stay tracked.
+/data/
+/datasets/
 runs/
 checkpoints/
 *.ckpt
