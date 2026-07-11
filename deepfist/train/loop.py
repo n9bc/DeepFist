@@ -112,12 +112,13 @@ def train(cfg: TrainConfig) -> None:
         torch.nn.utils.clip_grad_norm_(net.parameters(), cfg.grad_clip)
         opt.step()
         if step % 100 == 0:
-            print(f"step {step} loss {float(loss):.3f} lr {opt.param_groups[0]['lr']:.2e}")
+            print(f"step {step} loss {float(loss):.3f} lr {opt.param_groups[0]['lr']:.2e}",
+                  flush=True)
         if step > 0 and step % cfg.eval_every == 0:
             table = evaluate_per_snr(net, [10, 6, 3, 0, -3, -6], 20,
                                      cfg.gen_config, device=device)
             print(f"[eval @ {step}] per-SNR CER: " +
-                  " ".join(f"{k:+.0f}dB={v:.3f}" for k, v in table.items()))
+                  " ".join(f"{k:+.0f}dB={v:.3f}" for k, v in table.items()), flush=True)
             torch.save(net.state_dict(), os.path.join(cfg.out_dir, "model.pt"))
             net.train()
     torch.save(net.state_dict(), os.path.join(cfg.out_dir, "model.pt"))
