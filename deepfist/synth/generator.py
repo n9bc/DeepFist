@@ -1,0 +1,88 @@
+"""Orchestrate morse + synth units into fixed-length labeled CW clips."""
+from dataclasses import dataclass, field
+import numpy as np
+
+from deepfist.synth.text import random_message
+from deepfist.synth.keyer import text_to_segments, segments_to_envelope
+from deepfist.synth.fist import apply_fist, FistParams
+from deepfist.synth.tone import envelope_to_audio
+from deepfist.synth.channel import degrade, ChannelConfig
+from deepfist.morse.alphabet import text_to_tokens, tokens_to_text
+from deepfist.morse.timing import wpm_to_timing
+
+
+@dataclass
+class GenConfig:
+    sample_rate: int = 8000
+    window_s: float = 6.0
+    wpm_range: tuple[float, float] = (10.0, 40.0)
+    pitch_range: tuple[float, float] = (600.0, 700.0)
+    snr_range: tuple[float, float] = (-6.0, 10.0)
+    impair: bool = True
+    channel: ChannelConfig = field(default_factory=ChannelConfig)
+
+
+@dataclass
+class Sample:
+    audio: np.ndarray
+    label: str
+    meta: dict
+
+
+def _fit_message(rng, timing, window_s):
+    """Draw a message and drop trailing tokens until its keyed duration fits.
+
+    A single character always fits the window at 10-40 WPM, so this terminates.
+    """
+    msg = random_message(rng, max_tokens=40)
+    toks = text_to_tokens(msg)
+    while toks:
+        candidate = tokens_to_text(toks).strip()
+        if not candidate:
+            break
+        segs = text_to_segments(candidate, timing)
+        dur = sum(s.duration for s in segs)
+        if dur <= window_s * 0.9:
+            return candidate, segs, dur
+        toks = toks[:-1]
+    # Fallback: shortest possible message.
+    segs = text_to_segments("E", timing)
+    return "E", segs, sum(s.duration for s in segs)
+
+
+def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample:
+    cfg = config or GenConfig()
+    rng = np.random.default_rng(seed)
+    sr = cfg.sample_rate
+    n = int(cfg.window_s * sr)
+
+    wpm = float(rng.uniform(*cfg.wpm_range))
+    pitch = float(rng.uniform(*cfg.pitch_range))
+    snr = float(rng.uniform(*cfg.snr_range))
+    timing = wpm_to_timing(wpm)
+
+    msg, segs, keyed_dur = _fit_message(rng, timing, cfg.window_s)
+    segs = apply_fist(segs, rng, FistParams(
+        jitter_sigma=float(rng.uniform(0.03, 0.15)),
+        weight=float(rng.uniform(-0.15, 0.15)),
+    ))
+    env = segments_to_envelope(segs, sr)
+    drift = float(rng.uniform(0, 3)) if cfg.impair else 0.0
+    audio = envelope_to_audio(env, sr, pitch, drift_hz=drift)
+    if len(audio) > n:
+        audio = audio[:n]
+
+    # Random start offset within the window, then pad to fixed length.
+    clip = np.zeros(n, dtype=np.float32)
+    start = int(rng.integers(0, n - len(audio) + 1)) if len(audio) < n else 0
+    clip[start:start + len(audio)] = audio
+
+    if cfg.impair:
+        clip = degrade(clip, sr, snr, rng, cfg.channel)
+
+    meta = {
+        "wpm": wpm, "pitch_hz": pitch, "snr_db": snr, "sample_rate": sr,
+        "keyed_duration_s": keyed_dur, "window_s": cfg.window_s, "seed": seed,
+        "start_s": start / sr,
+    }
+    return Sample(audio=clip, label=msg, meta=meta)
