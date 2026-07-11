@@ -48,7 +48,9 @@ async def run(uri, ckpt, rx_target, window, hop, seconds, gate):
     state = {"sr": None, "factor": 1, "freq": None, "packets": 0}
     ring = None  # allocated once we learn the native sample rate
 
-    async with websockets.connect(uri, max_size=None) as ws:
+    # ping_interval=None: Thetis doesn't reliably pong while streaming audio, so
+    # the default keepalive tears down long sessions (~20s) with a ping timeout.
+    async with websockets.connect(uri, max_size=None, ping_interval=None) as ws:
         ready = False
         # --- background receiver: fill the ring buffer from RX audio frames ---
         async def receiver():
