@@ -40,7 +40,6 @@ class CwCtcNet(nn.Module):
             ConvBN2d(48, 64, stride=(2, 2)),
             ConvBN2d(64, 96, stride=(2, s4_t)),
         ])
-        self.freq_pool = nn.AdaptiveMaxPool2d((1, None))   # collapse freq -> 1
         self.proj = nn.Conv1d(96, 128, 1, bias=False)
         self.proj_bn = nn.BatchNorm1d(128)
         self.tcn = nn.ModuleList([ResTCN(128, d) for d in (1, 2, 4, 8, 16, 32, 64, 1)])
@@ -51,7 +50,7 @@ class CwCtcNet(nn.Module):
     def forward(self, x):
         for layer in self.stem:
             x = layer(x)
-        x = self.freq_pool(x).squeeze(2)               # [B,96,T']
+        x = torch.amax(x, dim=2)                       # max-pool over freq -> [B,96,T']
         x = F.relu(self.proj_bn(self.proj(x)), inplace=True)
         for block in self.tcn:
             x = block(x)
