@@ -1,9 +1,14 @@
+import json
+from pathlib import Path
 import numpy as np
+import pytest
 import torch
 import onnxruntime as ort
 from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import greedy_ctc_decode
-from deepfist.export.to_onnx import export_onnx
+from deepfist.export.to_onnx import (export_onnx, write_metadata,
+                                     export_from_checkpoint)
+from deepfist.morse.alphabet import TOKENS
 
 
 def _run_onnx(path, x):
@@ -28,6 +33,21 @@ def test_onnx_matches_pytorch_and_dynamic_time(tmp_path):
 
 def test_export_requires_eval_mode(tmp_path):
     net = CwCtcNet().train()
-    import pytest
     with pytest.raises(AssertionError):
         export_onnx(net, str(tmp_path / "x.onnx"))
+
+
+def test_metadata_sidecar(tmp_path):
+    onnx_path = tmp_path / "m.onnx"
+    onnx_path.write_bytes(b"stub")
+    meta_path = write_metadata(str(onnx_path), time_downsample=2)
+    meta = json.loads(Path(meta_path).read_text())
+    assert meta["tokens"] == TOKENS and len(meta["tokens"]) == 48
+    assert meta["ctc"]["blank_index"] == 0
+    assert meta["preprocessing"]["n_fft"] == 256
+    assert meta["preprocessing"]["freq_bins"] == 23
+
+
+def test_export_from_checkpoint_missing(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        export_from_checkpoint(str(tmp_path / "nope.pt"), str(tmp_path / "o.onnx"))
