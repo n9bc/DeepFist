@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ML artifacts / data (keep the repo light; datasets are generated on the fly)
+data/
+datasets/
+runs/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+wandb/
+
+# Large model exports — track deliberately/with LFS, not by accident
+*.onnx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
