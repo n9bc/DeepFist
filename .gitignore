@@ -6,6 +6,12 @@ venv/
 env/
 *.egg-info/
 .ipynb_checkpoints/
+.pytest_cache/
+build/
+dist/
+
+# Generated audio clips (from scripts/listen.py)
+*.wav
 
 # ML artifacts / data (keep the repo light; datasets are generated on the fly)
 data/
