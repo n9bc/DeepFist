@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deepfist.model.net import CwCtcNet, count_params
 from deepfist.model.decode import greedy_ctc_decode
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+from deepfist.features.conditioner import maybe_condition
 from deepfist.train.metrics import cer
 
 DEEPCW_DIR = Path(r"C:\dev\deepcw-engine")
@@ -103,7 +104,7 @@ def decode_ours(ckpt: Path, rows, device: str, downsample: int = 2):
             a = a.astype(np.float32) / 32768.0
             if sr != SAMPLE_RATE:
                 a = resample_poly(a, SAMPLE_RATE, sr).astype(np.float32)
-            spec = audio_to_spectrogram(a, SAMPLE_RATE)          # [F, T]
+            spec = audio_to_spectrogram(maybe_condition(a, SAMPLE_RATE), SAMPLE_RATE)          # [F, T]
             lp = net(spec.unsqueeze(0).unsqueeze(0).to(device))  # [T, B, C]
             preds.append(greedy_ctc_decode(lp)[0])
     return preds

@@ -4,6 +4,7 @@ from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 
 from deepfist.synth.generator import generate, GenConfig
 from deepfist.features.spectrogram import audio_to_spectrogram
+from deepfist.features.conditioner import maybe_condition
 from deepfist.morse.alphabet import text_to_tokens, TOKEN_TO_ID
 
 
@@ -22,7 +23,7 @@ class CwIterableDataset(IterableDataset):
             seed = self.base_seed * 1_000_003 + wid + step * nworkers
             s = generate(seed=seed, config=self.gen_config)
             ids = [TOKEN_TO_ID[t] for t in text_to_tokens(s.label)]
-            spec = audio_to_spectrogram(s.audio, sr).unsqueeze(0)   # [1,F,T]
+            spec = audio_to_spectrogram(maybe_condition(s.audio, sr), sr).unsqueeze(0)   # [1,F,T]
             if spec.shape[-1] >= max(1, len(ids)):                  # CTC length guard
                 yield spec, torch.tensor(ids, dtype=torch.long), len(ids)
             step += 1

@@ -12,6 +12,7 @@ from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 
 from deepfist.synth.generator import generate, GenConfig
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+from deepfist.features.conditioner import maybe_condition
 from deepfist.morse.alphabet import text_to_tokens, TOKEN_TO_ID
 from deepfist.data.dataset import collate, _worker_init
 
@@ -36,7 +37,7 @@ def _wmr_spec(wav_path):
     a = a.astype(np.float32) / 32768.0
     if sr != SAMPLE_RATE:
         a = resample_poly(a, SAMPLE_RATE, sr).astype(np.float32)
-    return audio_to_spectrogram(a, SAMPLE_RATE).unsqueeze(0)   # [1,F,T]
+    return audio_to_spectrogram(maybe_condition(a, SAMPLE_RATE), SAMPLE_RATE).unsqueeze(0)   # [1,F,T]
 
 
 class BlendedDataset(IterableDataset):
@@ -63,7 +64,7 @@ class BlendedDataset(IterableDataset):
                 seed = self.base_seed * 1_000_003 + wid + step * nworkers
                 s = generate(seed=seed, config=self.cfg)
                 ids = [TOKEN_TO_ID[t] for t in text_to_tokens(s.label)]
-                spec = audio_to_spectrogram(s.audio, self.cfg.sample_rate).unsqueeze(0)
+                spec = audio_to_spectrogram(maybe_condition(s.audio, self.cfg.sample_rate), self.cfg.sample_rate).unsqueeze(0)
                 step += 1
             if spec.shape[-1] >= max(1, len(ids)):
                 yield spec, torch.tensor(ids, dtype=torch.long), len(ids)

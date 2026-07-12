@@ -9,7 +9,7 @@ from pathlib import Path
 from scipy.io import wavfile
 
 PY = sys.executable
-SPEEDS = [20, 25, 30, 35, 40]
+SPEEDS = [10, 13, 15, 18, 20, 25, 30, 35, 40]
 HOLDOUT = 75.0
 WIN, HOP, SKIP, MINCH = 6, 3, 30, 3
 

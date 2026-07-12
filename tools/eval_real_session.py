@@ -28,6 +28,7 @@ from scipy.signal import resample_poly
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+from deepfist.features.conditioner import maybe_condition
 from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import greedy_ctc_decode
 from deepfist.train.metrics import cer
@@ -85,7 +86,7 @@ def decode_ours(ckpt, a, sr, win, hop):
         for seg in windows(a, sr, win, hop):
             if len(seg) < sr * 1: continue
             x = resample_poly(seg, SAMPLE_RATE, sr).astype(np.float32)
-            lp = net(audio_to_spectrogram(x, SAMPLE_RATE).unsqueeze(0).unsqueeze(0))
+            lp = net(audio_to_spectrogram(maybe_condition(x, SAMPLE_RATE), SAMPLE_RATE).unsqueeze(0).unsqueeze(0))
             parts.append(greedy_ctc_decode(lp)[0])
     return " ".join(parts)
 
