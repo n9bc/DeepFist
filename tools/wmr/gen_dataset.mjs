@@ -25,7 +25,7 @@ const OUT = args.out || 'dataset'
 mkdirSync(OUT, { recursive: true })
 
 // ---- rng (seeded, portable) ----
-let _s = 12345 >>> 0
+let _s = (parseInt(args.seed || '12345')) >>> 0
 const rnd = () => (_s = (_s * 1664525 + 1013904223) >>> 0) / 4294967296
 const ri = (a, b) => a + Math.floor(rnd() * (b - a))
 const pick = arr => arr[ri(0, arr.length)]
