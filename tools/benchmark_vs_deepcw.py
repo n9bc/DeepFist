@@ -247,7 +247,7 @@ def main():
 
     latency = {}
     if args.latency:
-        print("\nlatency (CPU, 1 thread, per 6s window — live-decode proxy):")
+        print("\nlatency (CPU, 1 thread, per 6s window - live-decode proxy):")
         for ckpt in args.ckpt:
             lat = measure_latency(Path(ckpt))
             latency[Path(ckpt).parent.name] = lat
