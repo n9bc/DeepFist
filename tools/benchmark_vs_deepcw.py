@@ -55,17 +55,31 @@ def snr_bucket(snr: float) -> int:
     return int(round(snr))
 
 
+def _nospace(s: str) -> str:
+    return s.replace(" ", "")
+
+
 def score(preds, rows):
-    """Return (overall_cer, {bucket: cer}, n)."""
+    """Score a model's predictions.
+
+    Primary metric is **space-normalized** CER (spaces stripped from both pred and
+    target): CW word-spacing is genuinely ambiguous, and raw CER mostly measures
+    match to the label's spacing convention rather than decode quality. Raw CER is
+    also reported for reference.
+
+    Returns dict: {overall (norm), overall_raw, buckets (norm per SNR), n}.
+    """
     per_bucket = defaultdict(list)
-    allc = []
+    norm_all, raw_all = [], []
     for (_, text, snr), p in zip(rows, preds):
-        c = cer(p, text)
-        allc.append(c)
-        per_bucket[snr_bucket(snr)].append(c)
-    overall = sum(allc) / len(allc) if allc else 0.0
+        cn = cer(_nospace(p), _nospace(text))
+        norm_all.append(cn)
+        raw_all.append(cer(p, text))
+        per_bucket[snr_bucket(snr)].append(cn)
+    overall = sum(norm_all) / len(norm_all) if norm_all else 0.0
+    overall_raw = sum(raw_all) / len(raw_all) if raw_all else 0.0
     buckets = {b: sum(v) / len(v) for b, v in per_bucket.items()}
-    return overall, buckets, len(allc)
+    return {"overall": overall, "overall_raw": overall_raw, "buckets": buckets, "n": len(norm_all)}
 
 
 # ---------------------------------------------------------------------- deepfist
@@ -127,16 +141,19 @@ def surpasses(model_overall, model_b, dcw_overall, dcw_b) -> bool:
 
 
 def render_table(results, buckets_sorted):
+    """Table of space-normalized CER: overall (norm), raw for reference, per-SNR."""
     names = list(results.keys())
-    head = ["model", "overall"] + [f"{b:+d}dB" for b in buckets_sorted]
-    widths = [max(len(h), 8) for h in head]
+    head = ["model", "CER", "(raw)"] + [f"{b:+d}dB" for b in buckets_sorted]
+    widths = [max(len(h), 7) for h in head]
     lines = ["| " + " | ".join(h.ljust(w) for h, w in zip(head, widths)) + " |",
              "|" + "|".join("-" * (w + 2) for w in widths) + "|"]
     for name in names:
-        ov, bk, _n = results[name]
-        row = [name, f"{ov*100:.1f}%"] + [f"{bk.get(b, float('nan'))*100:.1f}%" for b in buckets_sorted]
+        r = results[name]
+        bk = r["buckets"]
+        row = ([name, f"{r['overall']*100:.1f}%", f"{r['overall_raw']*100:.1f}%"]
+               + [f"{bk.get(b, float('nan'))*100:.1f}%" for b in buckets_sorted])
         lines.append("| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n\n_CER = space-normalized (primary); (raw) includes word-spacing._"
 
 
 def main():
@@ -162,38 +179,37 @@ def main():
         label = p.parent.name or p.stem
         t0 = time.time()
         preds = decode_ours(p, rows, device, args.downsample)
-        ov, bk, n = score(preds, rows)
-        results[label] = (ov, bk, n)
-        print(f"  {label:10s} overall CER {ov*100:5.1f}%  ({time.time()-t0:.1f}s)")
+        results[label] = score(preds, rows)
+        print(f"  {label:10s} CER {results[label]['overall']*100:5.1f}% (raw {results[label]['overall_raw']*100:.1f}%)  ({time.time()-t0:.1f}s)")
 
     if args.deepcw:
         t0 = time.time()
         mod, meta, sess = load_deepcw()
         preds = decode_deepcw(mod, meta, sess, rows)
-        ov, bk, n = score(preds, rows)
-        results["DeepCW"] = (ov, bk, n)
-        print(f"  {'DeepCW':10s} overall CER {ov*100:5.1f}%  ({time.time()-t0:.1f}s)")
+        results["DeepCW"] = score(preds, rows)
+        print(f"  {'DeepCW':10s} CER {results['DeepCW']['overall']*100:5.1f}% (raw {results['DeepCW']['overall_raw']*100:.1f}%)  ({time.time()-t0:.1f}s)")
 
-    buckets_sorted = sorted({b for _, bk, _ in results.values() for b in bk})
+    buckets_sorted = sorted({b for r in results.values() for b in r["buckets"]})
     table = render_table(results, buckets_sorted)
     print("\n" + table)
 
     verdict = {}
     if "DeepCW" in results:
-        dov, dbk, _ = results["DeepCW"]
-        for name, (ov, bk, _) in results.items():
+        dcw = results["DeepCW"]
+        for name, r in results.items():
             if name == "DeepCW":
                 continue
-            win = surpasses(ov, bk, dov, dbk)
+            win = surpasses(r["overall"], r["buckets"], dcw["overall"], dcw["buckets"])
             verdict[name] = win
-            print(f"  {name}: {'SURPASSES DeepCW ✅' if win else 'does NOT surpass DeepCW'}"
-                  f"  (overall {ov*100:.1f}% vs {dov*100:.1f}%)")
+            print(f"  {name}: {'SURPASSES DeepCW' if win else 'does NOT surpass DeepCW'}"
+                  f"  (norm CER {r['overall']*100:.1f}% vs {dcw['overall']*100:.1f}%)")
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out = Path(args.out) if args.out else eval_dir.parent / f"bench_{stamp}"
     payload = {
         "eval_dir": str(eval_dir), "clips": len(rows), "buckets": buckets_sorted,
-        "results": {k: {"overall": v[0], "per_snr": v[1], "n": v[2]} for k, v in results.items()},
+        "metric": "space-normalized CER (primary); overall_raw includes word-spacing",
+        "results": results,
         "verdict_vs_deepcw": verdict,
     }
     out.with_suffix(".json").write_text(json.dumps(payload, indent=2))

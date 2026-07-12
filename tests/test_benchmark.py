@@ -21,11 +21,19 @@ def test_snr_bucket_rounds():
 def test_score_perfect_and_aggregation():
     rows = [(None, "5NN", -6.0), (None, "K7CO", -6.0), (None, "TEST", 10.0)]
     # perfect predictions -> 0 CER everywhere
-    ov, bk, n = B.score(["5NN", "K7CO", "TEST"], rows)
-    assert n == 3 and ov == 0.0 and bk[-6] == 0.0 and bk[10] == 0.0
+    r = B.score(["5NN", "K7CO", "TEST"], rows)
+    assert r["n"] == 3 and r["overall"] == 0.0 and r["buckets"][-6] == 0.0 and r["buckets"][10] == 0.0
     # one wholly-wrong 4-char pred at +10 -> CER 1.0 in that bucket
-    ov2, bk2, _ = B.score(["5NN", "K7CO", "XXXX"], rows)
-    assert bk2[-6] == 0.0 and bk2[10] == pytest.approx(1.0)
+    r2 = B.score(["5NN", "K7CO", "XXXX"], rows)
+    assert r2["buckets"][-6] == 0.0 and r2["buckets"][10] == pytest.approx(1.0)
+
+
+def test_score_space_normalized_ignores_word_spacing():
+    # DeepCW-style run-together prediction should score 0 under the primary metric
+    rows = [(None, "R 5NN NE TU", 10.0)]
+    r = B.score(["R5NNNETU"], rows)
+    assert r["overall"] == 0.0            # spaces stripped -> identical
+    assert r["overall_raw"] > 0.0          # raw CER still penalizes the 3 missing spaces
 
 
 def test_surpasses_requires_overall_and_all_high_snr_buckets():
