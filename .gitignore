@@ -32,3 +32,4 @@ wandb/
 Thumbs.db
 .vscode/
 .idea/
+runs/MASTER.SCP
