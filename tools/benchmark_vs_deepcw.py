@@ -31,7 +31,7 @@ from scipy.io import wavfile
 from scipy.signal import resample_poly
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from deepfist.model.net import CwCtcNet
+from deepfist.model.net import CwCtcNet, count_params
 from deepfist.model.decode import greedy_ctc_decode
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
 from deepfist.train.metrics import cer
@@ -135,6 +135,40 @@ def decode_deepcw(mod, meta, sess, rows):
     return preds
 
 
+# ----------------------------------------------------------------------- latency
+def measure_latency(ckpt: Path, window_s: float = 6.0, sr: int = SAMPLE_RATE,
+                    iters: int = 60, threads: int = 1):
+    """Mean/p95 forward-pass time for one window on CPU, single-thread — a proxy
+    for the C#/ONNX-Runtime live-decode deployment. Returns dict of ms + RTF."""
+    import time as _t
+    prev = torch.get_num_threads()
+    torch.set_num_threads(threads)
+    try:
+        cfg_path = Path(ckpt).parent / "config.json"
+        width, ds = 1.0, 2
+        if cfg_path.exists():
+            c = json.loads(cfg_path.read_text())
+            width, ds = c.get("width", 1.0), c.get("time_downsample", 2)
+        net = CwCtcNet(time_downsample=ds, width=width).eval()
+        n = int(window_s * sr)
+        spec = audio_to_spectrogram(np.zeros(n, np.float32), sr).unsqueeze(0).unsqueeze(0)
+        with torch.no_grad():
+            for _ in range(5):
+                net(spec)                                    # warmup
+            ts = []
+            for _ in range(iters):
+                t0 = _t.perf_counter()
+                net(spec)
+                ts.append((_t.perf_counter() - t0) * 1000.0)
+    finally:
+        torch.set_num_threads(prev)
+    ts.sort()
+    mean = sum(ts) / len(ts)
+    p95 = ts[int(0.95 * len(ts)) - 1]
+    return {"ms_mean": mean, "ms_p95": p95, "rtf": (window_s * 1000.0) / mean,
+            "params": count_params(net), "width": width}
+
+
 # ------------------------------------------------------------------------ report
 def surpasses(model_overall, model_b, dcw_overall, dcw_b) -> bool:
     """Success = lower overall CER AND <= DeepCW at every SNR bucket >= 0 dB."""
@@ -169,6 +203,7 @@ def main():
     ap.add_argument("--deepcw", action="store_true")
     ap.add_argument("--downsample", type=int, default=2)
     ap.add_argument("--limit", type=int, default=0, help="0 = all clips")
+    ap.add_argument("--latency", action="store_true", help="also report CPU 1-thread forward latency")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -210,6 +245,15 @@ def main():
             print(f"  {name}: {'SURPASSES DeepCW' if win else 'does NOT surpass DeepCW'}"
                   f"  (norm CER {r['overall']*100:.1f}% vs {dcw['overall']*100:.1f}%)")
 
+    latency = {}
+    if args.latency:
+        print("\nlatency (CPU, 1 thread, per 6s window — live-decode proxy):")
+        for ckpt in args.ckpt:
+            lat = measure_latency(Path(ckpt))
+            latency[Path(ckpt).parent.name] = lat
+            print(f"  {Path(ckpt).parent.name:10s} {lat['ms_mean']:6.1f} ms  p95 {lat['ms_p95']:6.1f} ms  "
+                  f"RTF {lat['rtf']:6.1f}x  ({lat['params']:,} params, width {lat['width']})")
+
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out = Path(args.out) if args.out else eval_dir.parent / f"bench_{stamp}"
     payload = {
@@ -217,6 +261,7 @@ def main():
         "metric": "space-normalized CER (primary); overall_raw includes word-spacing",
         "results": results,
         "verdict_vs_deepcw": verdict,
+        "latency_cpu_1thread": latency,
     }
     out.with_suffix(".json").write_text(json.dumps(payload, indent=2))
     out.with_suffix(".md").write_text(
