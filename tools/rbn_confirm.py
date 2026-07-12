@@ -29,6 +29,8 @@ Candidates (`dx`) are ranked by distinct-skimmer count, then peak SNR.
 Usage:
   # confirm one or more Lyra recording folders (auto-fetches the right RBN day)
   .venv/Scripts/python.exe tools/rbn_confirm.py --rec "C:/Users/.../2026-07-12_025923_14009kHz_CWU"
+  # + decode each clip (exp15 + CTC rescorer) and cross-check our picks vs RBN
+  DEEPFIST_CONDITION=1 .venv/Scripts/python.exe tools/rbn_confirm.py --rec "<dir>" --rescore
   # explicit slice (dial kHz, sideband, UTC ISO, seconds)
   .venv/Scripts/python.exe tools/rbn_confirm.py --freq 7010 --sideband CWU --utc 2026-07-11T00:02:40 --dur 20
   # self-test the matcher against a known 07-11 multi-skimmer cluster
@@ -51,7 +53,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-CACHE = Path(__file__).resolve().parents[1] / "runs" / "rbn_cache"
+ROOT = Path(__file__).resolve().parents[1]
+CACHE = ROOT / "runs" / "rbn_cache"
 ARCHIVE_URL = "https://data.reversebeacon.net/rbn_history/{ymd}.zip"
 UA = "Mozilla/5.0 (DeepFist rbn_confirm)"
 
@@ -200,14 +203,96 @@ def confirm_slice(dial_khz, sideband, utc_start: datetime, dur_s: float,
     return merged
 
 
-def confirm_recording(rec_dir: Path, margin=None, pad=TIME_PAD_S):
+# --------------------------------------------------------- decode-side (--rescore)
+_RESCORER = None
+
+
+def get_rescorer(ckpt: str):
+    """Lazy-load exp15 net + SCP + the shared rescore module (heavy torch import,
+    only paid when --rescore is used)."""
+    global _RESCORER
+    if _RESCORER is None:
+        import os
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/ for `rescore`
+        import rescore as R
+        if os.environ.get("DEEPFIST_CONDITION", "").lower() not in ("1", "true", "yes", "on"):
+            print("  [warn] DEEPFIST_CONDITION not set — exp15 is a CONDITIONED model, so "
+                  "decodes will be poor. Re-run with DEEPFIST_CONDITION=1.")
+        ck = Path(ckpt) if Path(ckpt).is_absolute() else ROOT / ckpt
+        _RESCORER = (R, R.load_net(ck), R.load_scp(ROOT / "data" / "MASTER.SCP"))
+    return _RESCORER
+
+
+def decode_recording(wav_path: Path, ckpt: str, win=6.0, hop=3.0,
+                     max_edit=2, max_cands=60) -> dict[str, float]:
+    """Slide `win`-second windows over the recording, greedy-decode + rescore each
+    (exp15 + CTC lattice), and aggregate the winning callsigns -> best margin seen.
+    Mirrors the live 6 s decode window; honors DEEPFIST_CONDITION like every tool."""
+    import numpy as np
+    import torch
+    from scipy.io import wavfile
+    from scipy.signal import resample_poly
+    from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+    from deepfist.features.conditioner import maybe_condition
+    from deepfist.model.decode import greedy_ctc_decode
+    R, net, scp = get_rescorer(ckpt)
+    sr, a = wavfile.read(str(wav_path))
+    if a.ndim > 1:
+        a = a.mean(axis=1)
+    a = a.astype(np.float32) / (np.iinfo(a.dtype).max if np.issubdtype(a.dtype, np.integer) else 1.0)
+    dur = len(a) / sr
+    picks: dict[str, float] = {}
+    t = 0.0
+    with torch.no_grad():
+        while t + win <= dur + hop:
+            seg = a[int(t * sr):int((t + win) * sr)]
+            if len(seg) >= sr:  # need >= 1 s
+                x = resample_poly(seg, SAMPLE_RATE, sr).astype(np.float32)
+                x = maybe_condition(x, SAMPLE_RATE)
+                lp = net(audio_to_spectrogram(x, SAMPLE_RATE).unsqueeze(0).unsqueeze(0))
+                for r in R.rescore_words(lp, greedy_ctc_decode(lp)[0], scp, max_edit, max_cands):
+                    c, m = r["winner"], r["margin"]
+                    if c not in picks or m > picks[c]:
+                        picks[c] = m
+            t += hop
+    return picks
+
+
+def scorecard(picks: dict[str, float], merged: dict):
+    """Print our rescored calls and cross-check them against the RBN-confirmed set."""
+    if not picks:
+        print("  rescore: no callsign-shaped decodes in this recording.")
+        return
+    our = sorted(picks.items(), key=lambda kv: -kv[1])
+    print("  rescored picks (call:margin nats):  "
+          + ", ".join(f"{c}:{m:.1f}" for c, m in our[:10]))
+    if not merged:
+        print("    (RBN archive unavailable -- cross-check pending; re-run when 07-13 is up)")
+        return
+    agreed = [(c, m) for c, m in our if c in merged]
+    for c, m in agreed:
+        print(f"    [AGREE] {c:9} ours {m:5.1f} nats  <->  RBN {len(merged[c]['spotters'])} skimmers")
+    unconf = [c for c, _ in our if c not in merged]
+    if unconf:
+        print(f"    [not in RBN window] {', '.join(unconf[:12])}")
+    missed = [dx for dx in merged if dx not in picks]
+    if missed:
+        print(f"    [RBN spotted, we missed] {', '.join(missed[:12])}")
+
+
+def confirm_recording(rec_dir: Path, margin=None, pad=TIME_PAD_S,
+                      rescore=False, ckpt="runs/exp15/model.pt"):
     sj = json.loads((rec_dir / "session.json").read_text())
     dial = sj["freqHz"] / 1000.0
     mode = sj.get("mode", "CWU")
     start = datetime.strptime(sj["created"], "%Y-%m-%dT%H:%M:%S")  # UTC per user
     dur = float(sj.get("durationSec", 0))
     print(f"\n=== {rec_dir.name}  ({mode} {dial:.1f} kHz, {dur:.0f}s @ {start:%Y-%m-%d %H:%M:%S}Z) ===")
-    return confirm_slice(dial, mode, start, dur, margin=margin, pad=pad)
+    merged = confirm_slice(dial, mode, start, dur, margin=margin, pad=pad)
+    if rescore:
+        wav = rec_dir / sj["audio"][0]["file"]
+        scorecard(decode_recording(wav, ckpt), merged)
+    return merged
 
 
 def selftest():
@@ -231,6 +316,9 @@ def main():
     ap.add_argument("--margin", type=float, default=None, help="freq match margin kHz (override)")
     ap.add_argument("--pad", type=float, default=TIME_PAD_S, help="UTC time pad s each side")
     ap.add_argument("--expect", help="assert this call appears (exit non-zero if not)")
+    ap.add_argument("--rescore", action="store_true",
+                    help="also decode each --rec with exp15 + CTC rescorer and cross-check")
+    ap.add_argument("--ckpt", default="runs/exp15/model.pt", help="model for --rescore")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -238,7 +326,8 @@ def main():
         sys.exit(selftest())
     if args.rec:
         for d in args.rec:
-            confirm_recording(Path(d), margin=args.margin, pad=args.pad)
+            confirm_recording(Path(d), margin=args.margin, pad=args.pad,
+                              rescore=args.rescore, ckpt=args.ckpt)
         return
     if args.freq and args.utc:
         confirm_slice(args.freq, args.sideband,

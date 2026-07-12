@@ -157,28 +157,40 @@ def fmt_top(ranked: list[tuple[float, str]], k: int = 3) -> str:
     return "  ".join(f"{c} {nll:.1f}" for nll, c in ranked[:k])
 
 
-def rescore(log_probs: torch.Tensor, greedy: str, scp: list[str],
-            max_edit: int, max_cands: int) -> None:
+def rescore_words(log_probs: torch.Tensor, greedy: str, scp: list[str],
+                  max_edit: int, max_cands: int) -> list[dict]:
+    """Rescore each callsign-shaped word of `greedy` against its SCP candidates,
+    scoring the full swapped sequence under the CTC lattice. Returns one dict per
+    callsign word: {word, winner, margin (nats to runner-up), nll, ranked}. Shared
+    by the CLI printer here and by tools/rbn_confirm.py --rescore."""
     words = greedy.split()
-    call_idxs = [i for i, w in enumerate(words) if is_call(w)]
-    if not call_idxs:
-        print("no callsign-shaped words in greedy output — try --probe mode")
-        return
-    for i in call_idxs:
-        word = words[i]
+    out: list[dict] = []
+    for i, word in enumerate(words):
+        if not is_call(word):
+            continue
         cands = scp_candidates(word, scp, max_edit, max_cands)
         if word not in cands:
             cands.insert(0, word)   # original always competes
-        ranked = []
-        for c in cands:
-            trial = words[:i] + [c] + words[i + 1:]
-            ranked.append((sequence_nll(log_probs, " ".join(trial)), c))
-        ranked.sort()
+        ranked = sorted(
+            (sequence_nll(log_probs, " ".join(words[:i] + [c] + words[i + 1:])), c)
+            for c in cands)
         best_nll, best = ranked[0]
         margin = (ranked[1][0] - best_nll) if len(ranked) > 1 else math.inf
-        flag = "" if best == word else "  <-- RESCORED"
-        print(f"  {word:10} -> {best:10} margin {margin:6.2f} nats "
-              f"({len(cands)} cands)   top3: {fmt_top(ranked)}{flag}")
+        out.append({"word": word, "winner": best, "margin": margin,
+                    "nll": best_nll, "ranked": ranked})
+    return out
+
+
+def rescore(log_probs: torch.Tensor, greedy: str, scp: list[str],
+            max_edit: int, max_cands: int) -> None:
+    results = rescore_words(log_probs, greedy, scp, max_edit, max_cands)
+    if not results:
+        print("  no callsign-shaped words in greedy output -- try --probe mode")
+        return
+    for r in results:
+        flag = "" if r["winner"] == r["word"] else "  <-- RESCORED"
+        print(f"  {r['word']:10} -> {r['winner']:10} margin {r['margin']:6.2f} nats "
+              f"({len(r['ranked'])} cands)   top3: {fmt_top(r['ranked'])}{flag}")
 
 
 def probe(log_probs: torch.Tensor, candidates: list[str]) -> None:
