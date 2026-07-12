@@ -28,24 +28,32 @@ class ResTCN(nn.Module):
         return F.relu(x + self.bn(self.conv(x)), inplace=True)
 
 
+def _ch(base: int, width: float) -> int:
+    """Scale a base channel count by `width`, rounded to a multiple of 8 (>=8)."""
+    return max(8, int(round(base * width / 8)) * 8)
+
+
 class CwCtcNet(nn.Module):
-    def __init__(self, n_classes: int = N_CLASSES, time_downsample: int = 2):
+    def __init__(self, n_classes: int = N_CLASSES, time_downsample: int = 2,
+                 width: float = 1.0):
         super().__init__()
         assert time_downsample in (2, 4)
         s4_t = 2 if time_downsample == 4 else 1
+        c1, c2, c3, c4 = (_ch(32, width), _ch(48, width), _ch(64, width), _ch(96, width))
+        t = _ch(128, width)
         # Stem stride is (freq, time). S3 always halves time; S4 halves again only for 4x.
         self.stem = nn.ModuleList([
-            ConvBN2d(1, 32, stride=(1, 1)),
-            ConvBN2d(32, 48, stride=(2, 1)),
-            ConvBN2d(48, 64, stride=(2, 2)),
-            ConvBN2d(64, 96, stride=(2, s4_t)),
+            ConvBN2d(1, c1, stride=(1, 1)),
+            ConvBN2d(c1, c2, stride=(2, 1)),
+            ConvBN2d(c2, c3, stride=(2, 2)),
+            ConvBN2d(c3, c4, stride=(2, s4_t)),
         ])
-        self.proj = nn.Conv1d(96, 128, 1, bias=False)
-        self.proj_bn = nn.BatchNorm1d(128)
-        self.tcn = nn.ModuleList([ResTCN(128, d) for d in (1, 2, 4, 8, 16, 32, 64, 1)])
-        self.head = nn.Conv1d(128, 128, 1, bias=False)
-        self.head_bn = nn.BatchNorm1d(128)
-        self.classifier = nn.Conv1d(128, n_classes, 1)
+        self.proj = nn.Conv1d(c4, t, 1, bias=False)
+        self.proj_bn = nn.BatchNorm1d(t)
+        self.tcn = nn.ModuleList([ResTCN(t, d) for d in (1, 2, 4, 8, 16, 32, 64, 1)])
+        self.head = nn.Conv1d(t, t, 1, bias=False)
+        self.head_bn = nn.BatchNorm1d(t)
+        self.classifier = nn.Conv1d(t, n_classes, 1)
 
     def forward(self, x):
         for layer in self.stem:

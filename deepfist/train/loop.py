@@ -1,4 +1,5 @@
 """Training loop and the overfit-tiny wiring gate."""
+import json
 import math
 import os
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ class TrainConfig:
     grad_clip: float = 5.0
     eval_every: int = 2000
     time_downsample: int = 2
+    width: float = 1.0         # channel-width multiplier for CwCtcNet
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     out_dir: str = "runs/exp"
     gen_config: GenConfig = field(default_factory=GenConfig)
@@ -85,8 +87,11 @@ def _lr_at(step, warmup, total, base_lr, floor_lr):
 
 def train(cfg: TrainConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
+    # Persist architecture params so eval/benchmark can rebuild the exact model.
+    with open(os.path.join(cfg.out_dir, "config.json"), "w") as f:
+        json.dump({"time_downsample": cfg.time_downsample, "width": cfg.width}, f)
     device = cfg.device
-    net = CwCtcNet(time_downsample=cfg.time_downsample).to(device)
+    net = CwCtcNet(time_downsample=cfg.time_downsample, width=cfg.width).to(device)
     decay, no_decay = [], []
     for _name, p in net.named_parameters():
         (no_decay if p.ndim == 1 else decay).append(p)

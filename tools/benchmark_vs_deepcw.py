@@ -84,7 +84,13 @@ def score(preds, rows):
 
 # ---------------------------------------------------------------------- deepfist
 def decode_ours(ckpt: Path, rows, device: str, downsample: int = 2):
-    net = CwCtcNet(time_downsample=downsample).to(device)
+    # Rebuild the exact architecture from the run's config.json if present.
+    cfg_path = Path(ckpt).parent / "config.json"
+    width, ds = 1.0, downsample
+    if cfg_path.exists():
+        c = json.loads(cfg_path.read_text())
+        width, ds = c.get("width", 1.0), c.get("time_downsample", downsample)
+    net = CwCtcNet(time_downsample=ds, width=width).to(device)
     net.load_state_dict(torch.load(str(ckpt), map_location=device))
     net.eval()
     preds = []
