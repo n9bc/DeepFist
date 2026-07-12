@@ -23,5 +23,5 @@ def test_cli_exports_and_runs(tmp_path):
     export.run_export(str(ckpt), str(out), downsample=2)
     assert out.exists() and (out.parent / "deepfist.onnx.json").exists()
     sess = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"])
-    y = sess.run(["log_probs"], {"spectrogram": np.random.randn(1, 1, 23, 400).astype("float32")})[0]
+    y = sess.run(["log_probs"], {"spectrogram": np.random.randn(1, 1, 65, 400).astype("float32")})[0]
     assert y.shape[2] == 48

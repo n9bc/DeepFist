@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 import torch
 
 from deepfist.morse.alphabet import TOKENS
-from deepfist.features.spectrogram import N_FFT, HOP, BAND_LO_HZ, BAND_HI_HZ
+from deepfist.features.spectrogram import (
+    N_FFT, HOP, BAND_LO_HZ, BAND_HI_HZ, SAMPLE_RATE, FREQ_BINS)
 from deepfist.model.net import CwCtcNet
 
 
-def export_onnx(model, out_path: str, example_time: int = 751, opset: int = 17) -> None:
+def export_onnx(model, out_path: str, example_time: int = 401, opset: int = 17) -> None:
     assert not model.training, "call model.eval() before export (folds BatchNorm)"
-    example = torch.randn(1, 1, 23, example_time)
+    example = torch.randn(1, 1, FREQ_BINS, example_time)
     torch.onnx.export(
         model, example, out_path,
         input_names=["spectrogram"], output_names=["log_probs"],
@@ -35,13 +36,13 @@ def write_metadata(onnx_path: str, time_downsample: int = 2) -> str:
         "model": "deepfist-cw-ctc",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(),
-        "input": {"name": "spectrogram", "layout": "[batch,1,freq=23,time]",
+        "input": {"name": "spectrogram", "layout": f"[batch,1,freq={FREQ_BINS},time]",
                   "dtype": "float32"},
         "output": {"name": "log_probs", "layout": "[time_out,batch,class=48]",
                    "dtype": "float32"},
         "preprocessing": {
-            "sample_rate": 8000, "n_fft": N_FFT, "hop_length": HOP,
-            "band_lo_hz": BAND_LO_HZ, "band_hi_hz": BAND_HI_HZ, "freq_bins": 23,
+            "sample_rate": SAMPLE_RATE, "n_fft": N_FFT, "hop_length": HOP,
+            "band_lo_hz": BAND_LO_HZ, "band_hi_hz": BAND_HI_HZ, "freq_bins": FREQ_BINS,
             "window": "hann", "center": True,
             "magnitude": "abs", "compress": "log1p", "normalize": "global_standardize",
         },

@@ -20,8 +20,8 @@ def test_onnx_matches_pytorch_and_dynamic_time(tmp_path):
     net = CwCtcNet(time_downsample=2).eval()
     out = tmp_path / "m.onnx"
     export_onnx(net, str(out))
-    for T in (751, 400):                       # dynamic-time check
-        x = torch.randn(1, 1, 23, T)
+    for T in (401, 200):                       # dynamic-time check
+        x = torch.randn(1, 1, 65, T)
         with torch.no_grad():
             torch_lp = net(x).numpy()
         onnx_lp = _run_onnx(str(out), x)
@@ -45,7 +45,7 @@ def test_metadata_sidecar(tmp_path):
     assert meta["tokens"] == TOKENS and len(meta["tokens"]) == 48
     assert meta["ctc"]["blank_index"] == 0
     assert meta["preprocessing"]["n_fft"] == 256
-    assert meta["preprocessing"]["freq_bins"] == 23
+    assert meta["preprocessing"]["freq_bins"] == 65
 
 
 def test_export_from_checkpoint_missing(tmp_path):

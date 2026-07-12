@@ -6,7 +6,7 @@ from deepfist.data.dataset import CwIterableDataset, collate, make_loader
 def test_yields_expected_shapes():
     ds = CwIterableDataset(base_seed=0)
     spec, target, tlen = next(iter(ds))
-    assert spec.shape[0] == 1 and spec.shape[1] == 23
+    assert spec.shape[0] == 1 and spec.shape[1] == 65
     assert target.dtype == torch.long and len(target) == tlen
 
 
