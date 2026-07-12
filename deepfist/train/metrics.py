@@ -3,6 +3,7 @@ import torch
 
 from deepfist.synth.generator import generate, GenConfig
 from deepfist.features.spectrogram import audio_to_spectrogram
+from deepfist.features.conditioner import maybe_condition
 from deepfist.model.decode import greedy_ctc_decode
 
 
@@ -38,7 +39,7 @@ def evaluate_per_snr(model, snr_points, clips_per_point, gen_config=None,
             total = 0.0
             for i in range(clips_per_point):
                 s = generate(seed=10_000 + int(snr) * 100 + i, config=cfg)
-                spec = audio_to_spectrogram(s.audio, cfg.sample_rate)
+                spec = audio_to_spectrogram(maybe_condition(s.audio, cfg.sample_rate), cfg.sample_rate)
                 lp = model(spec.unsqueeze(0).unsqueeze(0).to(device))
                 pred = greedy_ctc_decode(lp)[0]
                 total += cer(pred, s.label)
