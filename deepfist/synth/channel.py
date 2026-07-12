@@ -97,7 +97,7 @@ class ChannelConfig:
     qrn: bool = True
     freq_offset: bool = True
     rx_filter: bool = True
-    qsb_prob: float = 0.5
+    qsb_prob: float = 0.65
     flutter_prob: float = 0.2
     qrn_prob: float = 0.5
     offset_prob: float = 0.5
@@ -108,9 +108,12 @@ def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig,
             pitch_hz: float | None = None) -> np.ndarray:
     x = audio.astype(np.float32)
     if config.qsb and rng.random() < config.qsb_prob:
+        # Real off-air QSB is often slow AND deep — measured ~0.11 Hz (9 s period)
+        # fading to ~5 % of peak on real recordings. Cover that: rate down to
+        # 0.05 Hz and depth up to 0.97 (trough ~3 %), not just shallow/fast fades.
         x = apply_qsb(x, sample_rate, rng,
-                      rate_hz=float(rng.uniform(0.1, 1.0)),
-                      depth=float(rng.uniform(0.3, 0.9)))
+                      rate_hz=float(rng.uniform(0.05, 1.0)),
+                      depth=float(rng.uniform(0.3, 0.97)))
     if config.flutter and rng.random() < config.flutter_prob:
         x = apply_flutter(x, sample_rate, rng, rate_hz=float(rng.uniform(5, 20)))
     if config.freq_offset and rng.random() < config.offset_prob:
