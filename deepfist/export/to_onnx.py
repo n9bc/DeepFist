@@ -59,7 +59,16 @@ def export_from_checkpoint(ckpt_path: str, out_path: str,
                            time_downsample: int = 2, opset: int = 17) -> None:
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(ckpt_path)
-    net = CwCtcNet(time_downsample=time_downsample)
+    # Rebuild the exact architecture the checkpoint was trained with. config.json
+    # (written by the training loop) carries width + downsample for wider models.
+    width = 1.0
+    cfg_path = os.path.join(os.path.dirname(ckpt_path), "config.json")
+    if os.path.exists(cfg_path):
+        with open(cfg_path) as f:
+            c = json.load(f)
+        width = c.get("width", 1.0)
+        time_downsample = c.get("time_downsample", time_downsample)
+    net = CwCtcNet(time_downsample=time_downsample, width=width)
     net.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
     net.eval()
     export_onnx(net, out_path, opset=opset)
