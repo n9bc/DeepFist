@@ -49,6 +49,8 @@ const P = {
     snrMin: num('snr-min', base.snrMin),
     snrMax: num('snr-max', base.snrMax),
     snrBuckets: Math.round(num('snr-buckets', base.snrBuckets)),
+    wpmMin: Math.round(num('wpm-min', 25)),
+    wpmMax: Math.round(num('wpm-max', 55)),   // 40->55: cover fast contest CW
 }
 
 // ---- rng (seeded, portable) ----
@@ -97,14 +99,14 @@ function renderInto(buf, text, { wpm, pitch, amp }) {
 
 function makeClip(idx) {
     const buf = new Float32Array(WIN)
-    const wpm = ri(25, 41), pitch = 500 + rnd() * 250
+    const wpm = ri(P.wpmMin, P.wpmMax + 1), pitch = 500 + rnd() * 250
     const label = renderInto(buf, utterance(), { wpm, pitch, amp: 1.0 })
 
     // QRM: weaker interfering stations at nearby pitches
     let nq = 0
     if (rnd() < P.qrmProb) { nq = ri(1, P.qrmMax + 1); for (let k = 0; k < nq; k++) {
         let p = pitch + (rnd() < 0.5 ? -1 : 1) * (60 + rnd() * 300); p = Math.max(350, Math.min(950, p))
-        renderInto(buf, utterance(), { wpm: ri(25, 41), pitch: p, amp: P.qrmAmpMin + rnd() * (P.qrmAmpMax - P.qrmAmpMin) })
+        renderInto(buf, utterance(), { wpm: ri(P.wpmMin, P.wpmMax + 1), pitch: p, amp: P.qrmAmpMin + rnd() * (P.qrmAmpMax - P.qrmAmpMin) })
     }}
     // QSB
     if (rnd() < P.qsbProb) { const rate = 0.1 + rnd() * 0.9, depth = 0.3 + rnd() * 0.6, ph = rnd() * 6.28
