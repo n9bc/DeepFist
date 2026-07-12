@@ -102,6 +102,10 @@ class ChannelConfig:
     qrn_prob: float = 0.5
     offset_prob: float = 0.5
     rx_filter_prob: float = 0.6
+    # CW-filter passband width sampling (Hz). Default spans a wide 200-550 Hz.
+    # Real rigs run much narrower dedicated CW filters (~60/90/150 Hz); set e.g.
+    # (60.0, 150.0) to model that regime and its edge-ringing on the keying.
+    rx_width_range: tuple[float, float] = (200.0, 550.0)
 
 
 def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig,
@@ -124,6 +128,6 @@ def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig,
     # Receiver CW filter last: shapes signal AND noise into a real passband.
     if config.rx_filter and pitch_hz is not None and rng.random() < config.rx_filter_prob:
         center = pitch_hz + float(rng.uniform(-40, 40))
-        width = float(rng.uniform(200, 550))
+        width = float(rng.uniform(*config.rx_width_range))
         x = apply_rx_filter(x, sample_rate, center, width)
     return np.clip(x, -1.0, 1.0).astype(np.float32)

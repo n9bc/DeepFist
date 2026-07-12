@@ -7,8 +7,9 @@ from deepfist.synth.keyer import text_to_segments, segments_to_envelope
 from deepfist.synth.fist import apply_fist, FistParams
 from deepfist.synth.tone import envelope_to_audio
 from deepfist.synth.channel import degrade, ChannelConfig
+from deepfist.synth.codec import maybe_mp3
 from deepfist.morse.alphabet import text_to_tokens, tokens_to_text
-from deepfist.morse.timing import wpm_to_timing
+from deepfist.morse.timing import wpm_to_timing, morph_timing
 
 
 @dataclass
@@ -23,6 +24,22 @@ class GenConfig:
     qrm_prob: float = 0.6
     qrm_max: int = 3
     channel: ChannelConfig = field(default_factory=ChannelConfig)
+
+    # --- realism-augmentation knobs (default = current behaviour, so nothing
+    #     changes unless a caller opts in). See HANDOFF §17.6: these target the
+    #     synthetic->real high-speed morphology gap. ---
+    # Envelope rise/fall time (s). Real rigs vary ~2-15 ms; historically fixed 5 ms.
+    rise_range: tuple[float, float] = (0.005, 0.005)
+    # Dah/dit ratio jitter: nominal 3.0, sampled uniformly in 3.0 +/- this. Real
+    # fists run ~2.6-3.4 (set ~0.4 to cover that). 0.0 = exact 1:3.
+    dahdit_jitter: float = 0.0
+    # Inter-element/character/word gap scaling range. Real spacing stretches and
+    # compresses (~0.65-1.15x). (1.0, 1.0) = exact PARIS spacing.
+    gap_scale_range: tuple[float, float] = (1.0, 1.0)
+    # MP3 codec-artifact augmentation: probability of an encode/decode round-trip
+    # and the bitrate (kbps) choices. 0.0 = off (no codec artifacts, as before).
+    mp3_prob: float = 0.0
+    mp3_bitrates: tuple[int, ...] = (24, 32, 48, 64)
 
 
 @dataclass
@@ -113,13 +130,18 @@ def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample
     pitch = float(rng.uniform(*cfg.pitch_range))
     snr = float(rng.uniform(*cfg.snr_range))
     timing = wpm_to_timing(wpm)
+    # Optional morphology knobs (dah/dit ratio + gap scaling); no-ops at defaults.
+    ratio = (3.0 + float(rng.uniform(-cfg.dahdit_jitter, cfg.dahdit_jitter))
+             if cfg.dahdit_jitter else None)
+    timing = morph_timing(timing, dahdit_ratio=ratio,
+                          gap_scale=float(rng.uniform(*cfg.gap_scale_range)))
 
     msg, segs, keyed_dur = _fit_message(rng, timing, cfg.window_s)
     segs = apply_fist(segs, rng, FistParams(
         jitter_sigma=float(rng.uniform(0.03, 0.15)),
         weight=float(rng.uniform(-0.15, 0.15)),
     ))
-    env = segments_to_envelope(segs, sr)
+    env = segments_to_envelope(segs, sr, rise=float(rng.uniform(*cfg.rise_range)))
     drift = float(rng.uniform(0, 3)) if cfg.impair else 0.0
     audio = envelope_to_audio(env, sr, pitch, drift_hz=drift)
     if len(audio) > n:
@@ -137,9 +159,16 @@ def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample
     if cfg.impair:
         clip = degrade(clip, sr, snr, rng, cfg.channel, pitch_hz=pitch)
 
+    # Lossy-codec artifacts last (mirrors the real capture->MP3 chain). Off by default.
+    mp3ed = False
+    if cfg.mp3_prob > 0.0:
+        before = clip
+        clip = maybe_mp3(clip, sr, rng, cfg.mp3_prob, cfg.mp3_bitrates)
+        mp3ed = clip is not before
+
     meta = {
         "wpm": wpm, "pitch_hz": pitch, "snr_db": snr, "sample_rate": sr,
         "keyed_duration_s": keyed_dur, "window_s": cfg.window_s, "seed": seed,
-        "start_s": start / sr, "n_qrm": n_qrm,
+        "start_s": start / sr, "n_qrm": n_qrm, "mp3": mp3ed,
     }
     return Sample(audio=clip, label=msg, meta=meta)

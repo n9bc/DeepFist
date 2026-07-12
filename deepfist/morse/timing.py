@@ -1,5 +1,5 @@
 """PARIS-standard CW element timing, with optional Farnsworth spacing."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -27,4 +27,27 @@ def wpm_to_timing(wpm: float, farnsworth_wpm: float | None = None) -> Timing:
     return Timing(
         dot=dot, dash=3 * dot, element_gap=dot,
         char_gap=char_gap, word_gap=word_gap,
+    )
+
+
+def morph_timing(timing: Timing, dahdit_ratio: float | None = None,
+                 gap_scale: float = 1.0) -> Timing:
+    """Return a copy of `timing` with a non-nominal dah/dit ratio and/or scaled gaps.
+
+    Real fists and rigs don't hold the textbook 1:3 dot:dash ratio or exact PARIS
+    spacing: measured dah/dit ratios run ~2.6-3.4 and inter-element/character gaps
+    stretch or compress (~0.65-1.15x). Varying these at *generation* time (as
+    opposed to the per-element noise `apply_fist` adds) reshapes the CW morphology
+    the model must recognise. Defaults (ratio=None, gap_scale=1.0) leave `timing`
+    unchanged, so callers that don't opt in keep the current behaviour.
+    """
+    dash = timing.dash if dahdit_ratio is None else dahdit_ratio * timing.dot
+    if gap_scale == 1.0 and dahdit_ratio is None:
+        return timing
+    return replace(
+        timing,
+        dash=dash,
+        element_gap=timing.element_gap * gap_scale,
+        char_gap=timing.char_gap * gap_scale,
+        word_gap=timing.word_gap * gap_scale,
     )

@@ -31,3 +31,22 @@ def test_message_fits_window():
     for seed in range(50):
         s = generate(seed=seed)
         assert s.meta["keyed_duration_s"] <= s.meta["window_s"]
+
+
+def test_realism_knobs_default_is_a_noop():
+    # New augmentation knobs default to current behaviour -> byte-identical output.
+    a = generate(seed=7)
+    b = generate(seed=7, config=GenConfig())
+    assert np.array_equal(a.audio, b.audio)
+    assert a.meta["mp3"] is False
+
+
+def test_morphology_knobs_change_audio_but_stay_valid():
+    cfg = GenConfig(dahdit_jitter=0.4, gap_scale_range=(0.65, 1.15),
+                    rise_range=(0.002, 0.015))
+    s = generate(seed=7, config=cfg)
+    base = generate(seed=7)
+    assert not np.array_equal(s.audio, base.audio)      # knobs had an effect
+    assert len(s.audio) == int(cfg.window_s * cfg.sample_rate)
+    for tok in text_to_tokens(s.label):
+        assert tok in TOKENS
