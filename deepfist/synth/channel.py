@@ -48,6 +48,27 @@ def apply_qrn(audio, sample_rate, rng, rate_per_s=3.0, amplitude=0.5) -> np.ndar
     return out.astype(np.float32)
 
 
+def apply_rx_filter(audio, sample_rate, center_hz, width_hz) -> np.ndarray:
+    """Band-limit through a CW-width passband (raised-cosine skirts), FFT domain.
+
+    Mimics a real receiver's CW filter: confines noise to the passband instead
+    of the flat wideband AWGN, matching the spectrogram texture of on-air audio.
+    """
+    n = len(audio)
+    if n < 4:
+        return audio.astype(np.float32)
+    X = np.fft.rfft(audio.astype(np.float64))
+    f = np.fft.rfftfreq(n, 1.0 / sample_rate)
+    lo, hi = center_hz - width_hz / 2, center_hz + width_hz / 2
+    skirt = max(20.0, width_hz * 0.25)
+    mask = ((f >= lo) & (f <= hi)).astype(np.float64)
+    ls = (f >= lo - skirt) & (f < lo)
+    mask[ls] = 0.5 * (1 + np.cos(np.pi * (lo - f[ls]) / skirt))
+    hs = (f > hi) & (f <= hi + skirt)
+    mask[hs] = 0.5 * (1 + np.cos(np.pi * (f[hs] - hi) / skirt))
+    return np.fft.irfft(X * mask, n=n).astype(np.float32)
+
+
 def apply_freq_offset(audio, sample_rate, offset_hz) -> np.ndarray:
     # Real-signal frequency shift via analytic signal.
     from numpy.fft import fft, ifft
@@ -75,13 +96,16 @@ class ChannelConfig:
     flutter: bool = False
     qrn: bool = True
     freq_offset: bool = True
+    rx_filter: bool = True
     qsb_prob: float = 0.5
     flutter_prob: float = 0.2
     qrn_prob: float = 0.5
     offset_prob: float = 0.5
+    rx_filter_prob: float = 0.6
 
 
-def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig) -> np.ndarray:
+def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig,
+            pitch_hz: float | None = None) -> np.ndarray:
     x = audio.astype(np.float32)
     if config.qsb and rng.random() < config.qsb_prob:
         x = apply_qsb(x, sample_rate, rng,
@@ -94,4 +118,9 @@ def degrade(audio, sample_rate, snr_db, rng, config: ChannelConfig) -> np.ndarra
     if config.qrn and rng.random() < config.qrn_prob:
         x = apply_qrn(x, sample_rate, rng)
     x = add_awgn(x, snr_db, rng)
+    # Receiver CW filter last: shapes signal AND noise into a real passband.
+    if config.rx_filter and pitch_hz is not None and rng.random() < config.rx_filter_prob:
+        center = pitch_hz + float(rng.uniform(-40, 40))
+        width = float(rng.uniform(200, 550))
+        x = apply_rx_filter(x, sample_rate, center, width)
     return np.clip(x, -1.0, 1.0).astype(np.float32)

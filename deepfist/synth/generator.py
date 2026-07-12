@@ -16,9 +16,12 @@ class GenConfig:
     sample_rate: int = 8000
     window_s: float = 6.0
     wpm_range: tuple[float, float] = (10.0, 40.0)
-    pitch_range: tuple[float, float] = (600.0, 700.0)
+    pitch_range: tuple[float, float] = (500.0, 760.0)   # matches measured on-air spread
     snr_range: tuple[float, float] = (-6.0, 10.0)
     impair: bool = True
+    qrm: bool = True                # mix in weaker interfering CW signals
+    qrm_prob: float = 0.6
+    qrm_max: int = 3
     channel: ChannelConfig = field(default_factory=ChannelConfig)
 
 
@@ -50,6 +53,56 @@ def _fit_message(rng, timing, window_s):
     return "E", segs, sum(s.duration for s in segs)
 
 
+def _trim_segments(segs, max_s):
+    """Keep only enough leading segments to fill max_s seconds (avoids rendering
+    a 30 s interferer message just to truncate it to the 6 s window)."""
+    out, acc = [], 0.0
+    for s in segs:
+        out.append(s)
+        acc += s.duration
+        if acc >= max_s:
+            break
+    return out
+
+
+def _render_cw(rng, text, wpm, pitch, sr, n, drift_max):
+    """Render text as keyed CW audio placed at a random offset in an n-sample clip."""
+    timing = wpm_to_timing(wpm)
+    segs = _trim_segments(text_to_segments(text, timing), n / sr)
+    segs = apply_fist(segs, rng, FistParams(
+        jitter_sigma=float(rng.uniform(0.03, 0.15)),
+        weight=float(rng.uniform(-0.15, 0.15))))
+    env = segments_to_envelope(segs, sr)
+    drift = float(rng.uniform(0, drift_max)) if drift_max else 0.0
+    audio = envelope_to_audio(env, sr, pitch, drift_hz=drift)
+    if len(audio) > n:
+        audio = audio[:n]
+    clip = np.zeros(n, dtype=np.float32)
+    start = int(rng.integers(0, n - len(audio) + 1)) if len(audio) < n else 0
+    clip[start:start + len(audio)] = audio
+    return clip
+
+
+def _add_qrm(clip, rng, cfg, main_pitch, n):
+    """Mix in 1..qrm_max weaker interfering CW signals at nearby pitches.
+
+    Interferers are strictly quieter than the main signal, so the learnable
+    rule is "transcribe the strongest CW, ignore the rest" — matching how you
+    tune the target station to the center of a pileup.
+    """
+    k = int(rng.integers(1, cfg.qrm_max + 1))
+    sr = cfg.sample_rate
+    for _ in range(k):
+        wpm = float(rng.uniform(*cfg.wpm_range))
+        offset = float(rng.uniform(60, 350)) * (1 if rng.random() < 0.5 else -1)
+        pitch = float(np.clip(main_pitch + offset, 350, 950))
+        text = random_message(rng, max_tokens=40)
+        inter = _render_cw(rng, text, wpm, pitch, sr, n,
+                           drift_max=3.0 if cfg.impair else 0.0)
+        clip = clip + float(rng.uniform(0.2, 0.65)) * inter
+    return clip, k
+
+
 def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample:
     cfg = config or GenConfig()
     rng = np.random.default_rng(seed)
@@ -77,12 +130,16 @@ def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample
     start = int(rng.integers(0, n - len(audio) + 1)) if len(audio) < n else 0
     clip[start:start + len(audio)] = audio
 
+    n_qrm = 0
+    if cfg.impair and cfg.qrm and rng.random() < cfg.qrm_prob:
+        clip, n_qrm = _add_qrm(clip, rng, cfg, pitch, n)
+
     if cfg.impair:
-        clip = degrade(clip, sr, snr, rng, cfg.channel)
+        clip = degrade(clip, sr, snr, rng, cfg.channel, pitch_hz=pitch)
 
     meta = {
         "wpm": wpm, "pitch_hz": pitch, "snr_db": snr, "sample_rate": sr,
         "keyed_duration_s": keyed_dur, "window_s": cfg.window_s, "seed": seed,
-        "start_s": start / sr,
+        "start_s": start / sr, "n_qrm": n_qrm,
     }
     return Sample(audio=clip, label=msg, meta=meta)

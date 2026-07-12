@@ -5,11 +5,19 @@ from deepfist.morse.alphabet import MORSE
 _PATTERN_TO_CHAR = {v: k for k, v in MORSE.items()}
 
 
-def _envelope(audio, sample_rate):
-    rect = np.abs(audio.astype(np.float64))
-    win = max(1, int(0.003 * sample_rate))
+def _envelope(audio, sample_rate, pitch_hz=None):
+    """Keying envelope. When the carrier pitch is known, use coherent I/Q
+    demodulation (ripple-free, pitch-independent); otherwise fall back to
+    rectify-and-smooth."""
+    x = audio.astype(np.float64)
+    win = max(1, int(0.004 * sample_rate))
     kernel = np.ones(win) / win
-    return np.convolve(rect, kernel, mode="same")
+    if pitch_hz:
+        t = np.arange(len(x)) / sample_rate
+        i = np.convolve(x * np.cos(2 * np.pi * pitch_hz * t), kernel, mode="same")
+        q = np.convolve(x * np.sin(2 * np.pi * pitch_hz * t), kernel, mode="same")
+        return 2.0 * np.sqrt(i * i + q * q)
+    return np.convolve(np.abs(x), kernel, mode="same")
 
 
 def _runs(mask):
@@ -24,7 +32,7 @@ def _runs(mask):
 
 
 def decode_clean_envelope(audio, sample_rate, pitch_hz, wpm) -> str:
-    env = _envelope(audio, sample_rate)
+    env = _envelope(audio, sample_rate, pitch_hz)
     thr = 0.25 * env.max()
     on = env > thr
     unit = (1.2 / wpm) * sample_rate  # samples per dot

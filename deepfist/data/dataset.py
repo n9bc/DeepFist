@@ -35,8 +35,16 @@ def collate(batch):
     return specs, targets, target_lengths
 
 
+def _worker_init(_worker_id):
+    # Pin each data worker to a single thread: numpy/torch BLAS otherwise spawn
+    # many threads per worker and oversubscribe the CPU, starving the GPU.
+    torch.set_num_threads(1)
+
+
 def make_loader(base_seed: int = 0, batch_size: int = 128,
                 num_workers: int = 0, gen_config: GenConfig | None = None) -> DataLoader:
     ds = CwIterableDataset(base_seed=base_seed, gen_config=gen_config)
     return DataLoader(ds, batch_size=batch_size, num_workers=num_workers,
-                      collate_fn=collate, drop_last=True)
+                      collate_fn=collate, drop_last=True,
+                      worker_init_fn=_worker_init if num_workers > 0 else None,
+                      persistent_workers=num_workers > 0)
