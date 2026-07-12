@@ -15,7 +15,7 @@ from deepfist.morse.timing import wpm_to_timing
 class GenConfig:
     sample_rate: int = 3200        # DeepCW-style hi-res front-end (12.5 Hz bins)
     window_s: float = 6.0
-    wpm_range: tuple[float, float] = (10.0, 40.0)
+    wpm_range: tuple[float, float] = (10.0, 55.0)  # 40->55: cover fast contest CW (real clips ran >40)
     pitch_range: tuple[float, float] = (500.0, 760.0)   # matches measured on-air spread
     snr_range: tuple[float, float] = (-6.0, 10.0)
     impair: bool = True
