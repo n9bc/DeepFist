@@ -1,4 +1,5 @@
-"""Real-time streaming CW decode over TCI (Thetis / ExpertSDR3).
+"""Real-time streaming CW decode over TCI. Default target: Lyra / ExpertSDR3
+on ws://127.0.0.1:40001 (also works with Thetis, pass --uri).
 
 Self-contained raw-WebSocket TCI client: connects, waits for READY, requests
 RX audio (48 kHz stereo -> 8 kHz mono). Runs the DeepFist model on a rolling
