@@ -25,13 +25,15 @@ def main():
     ap.add_argument("--snr-max", type=float, default=10.0, dest="snr_max")
     ap.add_argument("--qrm-prob", type=float, default=0.6, dest="qrm_prob")
     ap.add_argument("--flutter", action="store_true", help="enable channel flutter (extra realism)")
+    ap.add_argument("--init", default="", help="warm-start weights from this checkpoint (fine-tune)")
     args = ap.parse_args()
 
     chan = ChannelConfig(flutter=True if args.flutter else ChannelConfig().flutter)
     gen = GenConfig(snr_range=(args.snr_min, args.snr_max), qrm_prob=args.qrm_prob, channel=chan)
     cfg = TrainConfig(steps=args.steps, batch_size=args.batch, num_workers=args.workers,
                       time_downsample=args.downsample, width=args.width, out_dir=args.out, lr=args.lr,
-                      wmr_dir=args.wmr, wmr_prob=args.wmr_prob, gen_config=gen)
+                      wmr_dir=args.wmr, wmr_prob=args.wmr_prob, gen_config=gen,
+                      init_ckpt=args.init)
     train(cfg)
 
 

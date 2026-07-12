@@ -32,6 +32,7 @@ class TrainConfig:
     gen_config: GenConfig = field(default_factory=GenConfig)
     wmr_dir: str = ""          # if set, blend WebMorseRunner clips into training
     wmr_prob: float = 0.5
+    init_ckpt: str = ""        # if set, warm-start weights from this checkpoint (fine-tune)
 
 
 def _encode(clip):
@@ -92,6 +93,9 @@ def train(cfg: TrainConfig) -> None:
         json.dump({"time_downsample": cfg.time_downsample, "width": cfg.width}, f)
     device = cfg.device
     net = CwCtcNet(time_downsample=cfg.time_downsample, width=cfg.width).to(device)
+    if cfg.init_ckpt:
+        net.load_state_dict(torch.load(cfg.init_ckpt, map_location=device))
+        print(f"warm-started from {cfg.init_ckpt}", flush=True)
     decay, no_decay = [], []
     for _name, p in net.named_parameters():
         (no_decay if p.ndim == 1 else decay).append(p)

@@ -72,6 +72,7 @@ def main():
     ap.add_argument("--win", type=float, default=12.0, help="window seconds")
     ap.add_argument("--hop", type=float, default=8.0, help="hop seconds")
     ap.add_argument("--skip-start", type=float, default=0.0, help="skip leading seconds (preamble)")
+    ap.add_argument("--end", type=float, default=0.0, help="stop at this second per file (0=to end); use to carve train/eval splits without leakage")
     ap.add_argument("--min-chars", type=int, default=5)
     ap.add_argument("--rms-gate", type=float, default=0.003, help="skip near-silent windows below this RMS (post-norm scale)")
     ap.add_argument("--agree", default=None, help="DeepFist ckpt for consensus filtering (optional)")
@@ -114,6 +115,8 @@ def main():
         wav = Path(wav)
         sr, audio = load_mono(wav)
         dur = len(audio) / sr
+        if args.end and args.end < dur:
+            dur = args.end
         t = args.skip_start
         while t + args.win <= dur:
             seg = audio[int(t * sr):int((t + args.win) * sr)]
