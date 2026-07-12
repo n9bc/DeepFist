@@ -1,17 +1,18 @@
-"""Live CW decode over TCI (Thetis / ExpertSDR3) — demo-ready.
+"""Real-time streaming CW decode over TCI (Thetis / ExpertSDR3).
 
 Self-contained raw-WebSocket TCI client: connects, waits for READY, requests
-RX audio, and runs the trained DeepFist model on it. Tolerant of unknown TCI 2.0
-`*_ex` commands (the eesdr_tci library crashes on those). Handles the server's
-native rate/channels (48 kHz stereo) -> 8 kHz mono. Inference only.
+RX audio (48 kHz stereo -> 8 kHz mono). Runs the DeepFist model on a rolling
+window several times per second and STREAMS characters out as they stabilize
+(~1 s behind live), instead of dumping a whole window every N seconds.
 
-Two decode-time tricks make the live copy readable:
-  * activity gating  -- only decode windows that actually contain keyed CW
-    (independent in-band detector), so silence/noise never prints garbage.
-  * blank penalty     -- subtract a bias from the CTC blank logit to counter the
-    model's blank over-prediction on real audio (recovers suppressed content).
+Decode-time tricks that make the live copy readable:
+  * activity gating -- an independent in-band CW detector; silence never prints.
+  * blank penalty   -- counter the model's CTC blank over-prediction on real audio.
+  * frame-timed commit -- each decoded char has a frame time; a char is printed
+    once its audio is older than `guard` seconds (settled), so re-decodes of the
+    overlapping window don't reprint it.
 
-    .venv/Scripts/python.exe scripts/tci_decode.py --uri ws://127.0.0.1:50001
+    .venv/Scripts/python.exe scripts/tci_decode.py --uri ws://127.0.0.1:40001
 """
 import argparse
 import asyncio
@@ -31,7 +32,7 @@ from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import ids_to_text, BLANK_ID
 
 MODEL_SR = 8000
-HDR = 64          # TCI data packet header: 8x uint32 + 32 reserved bytes
+HDR = 64
 TYPE_RX_AUDIO = 1
 
 
@@ -43,26 +44,23 @@ def parse_packet(buf):
     return dtype, rx, sr, max(ch, 1), samples
 
 
-def greedy_penalized(log_probs, blank_pen):
-    """Greedy CTC collapse with a penalty subtracted from the blank logit."""
+def greedy_frames(log_probs, blank_pen):
+    """Return (char_ids, frame_indices, n_frames) with a blank-logit penalty."""
     lp = log_probs.clone()
     lp[..., BLANK_ID] -= blank_pen
     args = lp.argmax(-1)[:, 0].tolist()
-    prev, out = None, []
-    for s in args:
+    prev, ids, frames = None, [], []
+    for t, s in enumerate(args):
         if s != prev:
             if s != BLANK_ID:
-                out.append(s)
+                ids.append(s)
+                frames.append(t)
             prev = s
-    return ids_to_text(out)
+    return ids, frames, len(args)
 
 
 def cw_activity(a, sr):
-    """Independent detector: is there keyed CW in this window? Returns (bool, pitch).
-
-    Coherent envelope at the dominant in-band pitch; require on/off keying
-    structure with adequate in-band SNR. Robust to AGC (level-independent).
-    """
+    """Independent detector: keyed CW present in this window? Returns (bool, pitch)."""
     w = np.hanning(len(a))
     S = np.abs(np.fft.rfft(a * w)); f = np.fft.rfftfreq(len(a), 1.0 / sr)
     m = (f >= 300) & (f <= 1000)
@@ -84,13 +82,13 @@ def cw_activity(a, sr):
     return (snr > 6.0 and 0.03 < on.mean() < 0.9), pitch
 
 
-async def run(uri, ckpt, rx_target, window, hop, seconds, blank_pen):
+async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     net = CwCtcNet(time_downsample=2).to(device)
     net.load_state_dict(torch.load(ckpt, map_location=device))
     net.eval()
 
-    state = {"sr": None, "factor": 1, "freq": None, "packets": 0}
+    state = {"sr": None, "factor": 1, "freq": None, "total": 0}
     ring = None
 
     async with websockets.connect(uri, max_size=None, ping_interval=None) as ws:
@@ -122,10 +120,10 @@ async def run(uri, ckpt, rx_target, window, hop, seconds, blank_pen):
                     state["sr"] = sr
                     state["factor"] = max(1, round(sr / MODEL_SR))
                     ring = np.zeros(int(window * sr), dtype=np.float32)
-                    print(f"RX audio {sr} Hz x{ch} -> {MODEL_SR} Hz | model={Path(ckpt).parent.name} "
-                          f"blank_pen={blank_pen}\n", flush=True)
-                state["packets"] += 1
+                    print(f"RX {sr} Hz x{ch} -> {MODEL_SR} Hz | model={Path(ckpt).parent.name} "
+                          f"pen={blank_pen} window={window}s tick={tick}s\n", flush=True)
                 n = len(mono)
+                state["total"] += n
                 if n >= len(ring):
                     ring[:] = mono[-len(ring):]
                 else:
@@ -140,30 +138,47 @@ async def run(uri, ckpt, rx_target, window, hop, seconds, blank_pen):
             await asyncio.sleep(0.1)
         await ws.send("AUDIO_STREAM_SAMPLE_TYPE:float32;")
         await ws.send(f"AUDIO_START:{rx_target};")
-        print(f"listening on RX{rx_target}  (window {window}s, gated + blank-penalized)\n", flush=True)
+        print(f"streaming RX{rx_target}  (~{guard:.1f}s latency, updates {1/tick:.0f}x/s)\n>> ",
+              end="", flush=True)
 
+        committed_t = 0.0     # absolute audio time already printed
+        idle_gap = False
         start = time.time()
         try:
             while True:
-                await asyncio.sleep(hop)
-                if ring is None or state["packets"] == 0:
+                await asyncio.sleep(tick)
+                if ring is None or state["total"] == 0:
                     continue
+                audio_end = state["total"] / state["sr"]
                 buf = ring.copy()
                 audio = decimate(buf, state["factor"], ftype="fir").astype(np.float32) \
                     if state["factor"] > 1 else buf
-                ts = time.strftime("%H:%M:%S")
-                active, pitch = cw_activity(audio, MODEL_SR)
+                active, _pitch = cw_activity(audio, MODEL_SR)
                 if not active:
-                    print(f"[{ts}]  · · ·  (no CW)", flush=True)
-                else:
-                    with torch.no_grad():
-                        spec = audio_to_spectrogram(audio, MODEL_SR).unsqueeze(0).unsqueeze(0).to(device)
-                        text = greedy_penalized(net(spec), blank_pen)
-                    fk = f"{state['freq']/1000:.1f}kHz " if state["freq"] else ""
-                    print(f"[{ts}] {fk}{pitch:.0f}Hz | {text}", flush=True)
+                    if not idle_gap:
+                        sys.stdout.write(" "); sys.stdout.flush(); idle_gap = True
+                    committed_t = max(committed_t, audio_end - guard)
+                    if seconds and time.time() - start >= seconds:
+                        break
+                    continue
+                idle_gap = False
+                with torch.no_grad():
+                    spec = audio_to_spectrogram(audio, MODEL_SR).unsqueeze(0).unsqueeze(0).to(device)
+                    ids, frames, T = greedy_frames(net(spec), blank_pen)
+                # Commit the newly-settled time band (committed_t, audio_end-guard]
+                # exactly once. Advancing the boundary by settled time (not by the
+                # last char's drifting timestamp) prevents re-emitting boundary chars.
+                win_start = audio_end - window
+                settle_to = audio_end - guard
+                emit = [cid for cid, fr in zip(ids, frames)
+                        if committed_t < win_start + (fr / max(1, T)) * window <= settle_to]
+                committed_t = max(committed_t, settle_to)
+                if emit:
+                    sys.stdout.write(ids_to_text(emit)); sys.stdout.flush()
                 if seconds and time.time() - start >= seconds:
                     break
         finally:
+            print(flush=True)
             try:
                 await ws.send(f"AUDIO_STOP:{rx_target};")
             except Exception:
@@ -173,15 +188,17 @@ async def run(uri, ckpt, rx_target, window, hop, seconds, blank_pen):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--uri", default="ws://127.0.0.1:50001")
+    ap.add_argument("--uri", default="ws://127.0.0.1:40001")
     ap.add_argument("--ckpt", default="runs/exp2/model_8000.pt")
     ap.add_argument("--rx", type=int, default=0)
-    ap.add_argument("--window", type=float, default=8.0)
-    ap.add_argument("--hop", type=float, default=8.0)
+    ap.add_argument("--window", type=float, default=6.0, help="model context window (s)")
+    ap.add_argument("--tick", type=float, default=0.4, help="decode interval (s)")
+    ap.add_argument("--guard", type=float, default=1.3, help="commit delay / latency (s)")
     ap.add_argument("--seconds", type=float, default=0)
     ap.add_argument("--blank-penalty", type=float, default=3.0, dest="blank_pen")
     args = ap.parse_args()
-    asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.hop, args.seconds, args.blank_pen))
+    asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
+                    args.seconds, args.blank_pen))
 
 
 if __name__ == "__main__":
