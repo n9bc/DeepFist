@@ -30,6 +30,8 @@ multi-signal contest evals (wmr_evalA) are not meaningful for a conditioned mode
 | `tools/build_arrl_hispeed.py` | Orchestrate ARRL train/eval sets across speeds (edit `SPEEDS`), leakage-free tail holdout. |
 | `tools/eval_real_session.py` | **Honest real eval:** windowed full-session decode vs a ground-truth `.txt` transcript, space-normalized CER, per model. |
 | `tools/benchmark_vs_deepcw.py` | CER benchmark of DeepFist ckpt(s) vs DeepCW on a WMR-format dir (per-SNR, `--latency`). |
+| `tools/rescore.py` | **CTC hypothesis rescorer** (WSJT-X "Deep Search" for CW): score candidate callsigns against the model's CTC lattice via `F.ctc_loss`, instead of text edit distance (`scp_correct.py`). Default mode swaps SCP candidates into the greedy decode's callsign words; `--probe CALL` (+ `--t0/--t1` slice) scores explicit candidates on garbled clips. Decode-time only. |
+| `tools/scp_correct.py` | Text-only SCP snap (edit distance ≤1, unique match) — the simpler cousin of `rescore.py`; its logic is what's ported in diddle's `ScpDb::correct`. |
 | `scripts/train.py --init CKPT` | Warm-start (fine-tune) from a checkpoint instead of from scratch. |
 
 DeepCW (teacher/reference) is loaded from `C:\dev\deepcw-engine` at runtime — AGPL,
