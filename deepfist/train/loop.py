@@ -28,6 +28,8 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     out_dir: str = "runs/exp"
     gen_config: GenConfig = field(default_factory=GenConfig)
+    wmr_dir: str = ""          # if set, blend WebMorseRunner clips into training
+    wmr_prob: float = 0.5
 
 
 def _encode(clip):
@@ -92,8 +94,15 @@ def train(cfg: TrainConfig) -> None:
         [{"params": decay, "weight_decay": cfg.weight_decay},
          {"params": no_decay, "weight_decay": 0.0}], lr=cfg.lr, betas=(0.9, 0.999))
     ctc = nn.CTCLoss(blank=0, zero_infinity=True)
-    loader = make_loader(base_seed=1, batch_size=cfg.batch_size,
-                         num_workers=cfg.num_workers, gen_config=cfg.gen_config)
+    if cfg.wmr_dir:
+        from deepfist.data.wmr_dataset import make_blended_loader
+        loader = make_blended_loader(cfg.wmr_dir, cfg.wmr_prob, base_seed=1,
+                                     batch_size=cfg.batch_size, num_workers=cfg.num_workers,
+                                     gen_config=cfg.gen_config)
+        print(f"blending WMR clips from {cfg.wmr_dir} (p={cfg.wmr_prob})", flush=True)
+    else:
+        loader = make_loader(base_seed=1, batch_size=cfg.batch_size,
+                             num_workers=cfg.num_workers, gen_config=cfg.gen_config)
     use_amp = device == "cuda"
     net.train()
     it = iter(loader)

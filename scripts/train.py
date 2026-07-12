@@ -14,9 +14,12 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--downsample", type=int, default=2)
     ap.add_argument("--out", default="runs/exp")
+    ap.add_argument("--wmr", default="", help="WebMorseRunner dataset dir to blend in")
+    ap.add_argument("--wmr-prob", type=float, default=0.5, dest="wmr_prob")
     args = ap.parse_args()
     cfg = TrainConfig(steps=args.steps, batch_size=args.batch, num_workers=args.workers,
-                      time_downsample=args.downsample, out_dir=args.out)
+                      time_downsample=args.downsample, out_dir=args.out,
+                      wmr_dir=args.wmr, wmr_prob=args.wmr_prob)
     train(cfg)
 
 
