@@ -24,6 +24,33 @@ const N = parseInt(args.n || '3000')
 const OUT = args.out || 'dataset'
 mkdirSync(OUT, { recursive: true })
 
+// ---- difficulty profiles ----
+// Each field is a knob; individual --flags override the chosen profile.
+// `default` reproduces the original hardcoded behavior (backward compatible).
+const PROFILES = {
+    // original behavior
+    default: { qrmProb: 0.6,  qrmMax: 3, qrmAmpMin: 0.20, qrmAmpMax: 0.65, qsbProb: 0.5,  qrnProb: 0.5,  qrnMax: 18, snrMin: -6, snrMax: 10, snrBuckets: 0 },
+    // all features cranked hard (training)
+    full:    { qrmProb: 0.6,  qrmMax: 3, qrmAmpMin: 0.25, qrmAmpMax: 0.85, qsbProb: 0.6,  qrnProb: 0.6,  qrnMax: 12, snrMin: -6, snrMax: 10, snrBuckets: 0 },
+    // single dominant target, evenly SNR-bucketed (neutral eval)
+    fairA:   { qrmProb: 0.15, qrmMax: 1, qrmAmpMin: 0.15, qrmAmpMax: 0.40, qsbProb: 0.30, qrnProb: 0.30, qrnMax: 2,  snrMin: -6, snrMax: 10, snrBuckets: 9 },
+}
+const PROF = args.profile || 'default'
+const base = PROFILES[PROF] || PROFILES.default
+const num = (k, d) => args[k] !== undefined ? parseFloat(args[k]) : d
+const P = {
+    qrmProb: num('qrm-prob', base.qrmProb),
+    qrmMax: Math.round(num('qrm-max', base.qrmMax)),
+    qrmAmpMin: num('qrm-amp-min', base.qrmAmpMin),
+    qrmAmpMax: num('qrm-amp-max', base.qrmAmpMax),
+    qsbProb: num('qsb-prob', base.qsbProb),
+    qrnProb: num('qrn-prob', base.qrnProb),
+    qrnMax: Math.round(num('qrn-max', base.qrnMax)),
+    snrMin: num('snr-min', base.snrMin),
+    snrMax: num('snr-max', base.snrMax),
+    snrBuckets: Math.round(num('snr-buckets', base.snrBuckets)),
+}
+
 // ---- rng (seeded, portable) ----
 let _s = (parseInt(args.seed || '12345')) >>> 0
 const rnd = () => (_s = (_s * 1664525 + 1013904223) >>> 0) / 4294967296
@@ -68,37 +95,41 @@ function renderInto(buf, text, { wpm, pitch, amp }) {
     return text
 }
 
-function makeClip() {
+function makeClip(idx) {
     const buf = new Float32Array(WIN)
     const wpm = ri(25, 41), pitch = 500 + rnd() * 250
     const label = renderInto(buf, utterance(), { wpm, pitch, amp: 1.0 })
 
     // QRM: weaker interfering stations at nearby pitches
     let nq = 0
-    if (rnd() < 0.6) { nq = ri(1, 4); for (let k = 0; k < nq; k++) {
+    if (rnd() < P.qrmProb) { nq = ri(1, P.qrmMax + 1); for (let k = 0; k < nq; k++) {
         let p = pitch + (rnd() < 0.5 ? -1 : 1) * (60 + rnd() * 300); p = Math.max(350, Math.min(950, p))
-        renderInto(buf, utterance(), { wpm: ri(25, 41), pitch: p, amp: 0.2 + rnd() * 0.45 })
+        renderInto(buf, utterance(), { wpm: ri(25, 41), pitch: p, amp: P.qrmAmpMin + rnd() * (P.qrmAmpMax - P.qrmAmpMin) })
     }}
     // QSB
-    if (rnd() < 0.5) { const rate = 0.1 + rnd() * 0.9, depth = 0.3 + rnd() * 0.6, ph = rnd() * 6.28
+    if (rnd() < P.qsbProb) { const rate = 0.1 + rnd() * 0.9, depth = 0.3 + rnd() * 0.6, ph = rnd() * 6.28
         for (let i = 0; i < WIN; i++) buf[i] *= 1 - depth * 0.5 * (1 - Math.cos(2*Math.PI*rate*i/RATE + ph)) }
     // QRN crashes
-    if (rnd() < 0.5) { const nC = ri(0, Math.round(3 * WIN / RATE) + 1)
-        for (let c = 0; c < nC; c++) { const idx = ri(0, WIN), dec = Math.round(0.01*RATE), a = 0.4 + rnd()*0.6
-            for (let i = 0; i < dec && idx+i < WIN; i++) buf[idx+i] += a*(rnd()*2-1)*Math.exp(-i/(dec/4)) } }
-    // AWGN at random SNR
-    const snr = -6 + rnd() * 16
+    if (rnd() < P.qrnProb) { const nC = ri(0, P.qrnMax + 1)
+        for (let c = 0; c < nC; c++) { const idx2 = ri(0, WIN), dec = Math.round(0.01*RATE), a = 0.4 + rnd()*0.6
+            for (let i = 0; i < dec && idx2+i < WIN; i++) buf[idx2+i] += a*(rnd()*2-1)*Math.exp(-i/(dec/4)) } }
+    // AWGN — SNR either evenly bucketed (eval) or uniform random (train)
+    const snr = P.snrBuckets > 0
+        ? P.snrMin + (P.snrMax - P.snrMin) * ((idx % P.snrBuckets) / Math.max(1, P.snrBuckets - 1))
+        : P.snrMin + rnd() * (P.snrMax - P.snrMin)
     let p = 0; for (let i = 0; i < WIN; i++) p += buf[i]*buf[i]; p = p/WIN + 1e-12
     const nStd = Math.sqrt(p / Math.pow(10, snr/10))
     for (let i = 0; i < WIN; i++) { const u = Math.sqrt(-2*Math.log(rnd()+1e-12))*Math.cos(6.283*rnd())
         buf[i] = Math.max(-1, Math.min(1, buf[i] + nStd*u)) }
-    return { audio: buf, text: label, meta: { wpm, pitch: Math.round(pitch), snr: +snr.toFixed(1), n_qrm: nq } }
+    return { audio: buf, text: label, meta: { wpm, pitch: Math.round(pitch), snr: +snr.toFixed(1), n_qrm: nq, profile: PROF } }
 }
 
 const t0 = Date.now()
+console.log(`profile=${PROF} n=${N} seed=${args.seed || '12345'} -> ${OUT}`)
+console.log(`  knobs: ${JSON.stringify(P)}`)
 writeFileSync(`${OUT}/labels.jsonl`, '')
 for (let i = 0; i < N; i++) {
-    const { audio, text, meta } = makeClip()
+    const { audio, text, meta } = makeClip(i)
     const int16 = float32ToInt16(audio)
     writeFileSync(`${OUT}/clip_${i}.wav`, Buffer.from(buildWavBuffer([int16], int16.length, RATE)))
     appendFileSync(`${OUT}/labels.jsonl`, JSON.stringify({ file: `clip_${i}.wav`, text, meta }) + '\n')
