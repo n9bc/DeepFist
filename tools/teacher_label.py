@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import greedy_ctc_decode
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+from deepfist.features.conditioner import maybe_condition
 
 # Reuse the vetted DeepCW loader/decoder from the benchmark tool.
 import importlib.util as _ilu
@@ -63,7 +64,7 @@ def deepfist_decode(ckpt: Path, wav_path: Path, device: str) -> str:
     a = a.astype(np.float32) / 32768.0
     if sr != SAMPLE_RATE:
         a = resample_poly(a, SAMPLE_RATE, sr).astype(np.float32)
-    spec = audio_to_spectrogram(a, SAMPLE_RATE)
+    spec = audio_to_spectrogram(maybe_condition(a, SAMPLE_RATE), SAMPLE_RATE)
     with torch.no_grad():
         lp = net(spec.unsqueeze(0).unsqueeze(0).to(device))
     return greedy_ctc_decode(lp)[0]
