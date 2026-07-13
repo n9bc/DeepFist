@@ -26,6 +26,7 @@ from deepfist.model.decode import BLANK_ID, ids_to_text
 from deepfist.morse.alphabet import TOKENS
 
 WIN, HOP, PAD = 3.0, 0.4, 0.15
+WINDOW = int(6.0 * SAMPLE_RATE)          # match the synthetic training window (6 s @ SAMPLE_RATE)
 OUT = ROOT / "data" / "realset_train"
 
 
@@ -133,8 +134,15 @@ def main():
         clip = segment_anchor(wav, call, net)
         status = "no-locate"
         if clip is not None and len(clip) >= int(0.4 * SAMPLE_RATE):
+            # pad to the synthetic window length (silence) + save int16 so the WMR blend
+            # loader (divides by 32768, stacks fixed-size) consumes it correctly.
+            clip = clip[:WINDOW]
+            padded = np.zeros(WINDOW, dtype=np.float32)
+            padded[:len(clip)] = clip
+            peak = float(np.abs(padded).max()) or 1.0
+            clip16 = (padded / peak * 20000.0).astype(np.int16)
             fn = f"{call}_{kept:03d}.wav"
-            wavfile.write(str(OUT / fn), SAMPLE_RATE, clip.astype(np.float32))
+            wavfile.write(str(OUT / fn), SAMPLE_RATE, clip16)
             rows.append({"file": fn, "text": call, "src": sj.parent.name,
                          "dur": round(len(clip) / SAMPLE_RATE, 2),
                          "skimmers": m["rbn"]["skimmers"], "snr": m["rbn"]["peak_snr"]})
