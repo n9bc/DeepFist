@@ -139,7 +139,7 @@ def test_append_manifest_jsonl(tmp_path):
 # --- Task 5: orchestrator --------------------------------------------------------
 def _args(tmp_path, **over):
     a = types.SimpleNamespace(
-        uri="ws://x", rx=0, sideband="CWU", pitch=650, dwell=18, filter_hz=400,
+        uri="ws://x", rx=0, sideband="CWU", pitch=650, dwell=18, probe=3, filter_hz=400,
         ckpt="runs/exp15/model.pt", out=str(tmp_path),
     )
     a.__dict__.update(over)
@@ -203,26 +203,60 @@ def test_chase_once_disagreement_still_saves_labeled_sample(tmp_path, monkeypatc
     assert sj["decode"]["agree"] is False and sj["decode"]["our_pick"] == "W1AW"
 
 
-def test_chase_once_faded_not_saved(tmp_path, monkeypatch):
+def _seed(buf, now, call="K1GHL"):
+    for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
+        buf.add(RH.Spot(sp, 14009.0, call, 20, 28, now))
+
+
+def test_chase_once_verifies_signal_before_recording(tmp_path, monkeypatch):
+    # no signal at the probe -> must NOT record the full sample or decode
     buf = RH.SpotBuffer(min_skimmers=4)
     now = 1000.0
-    for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
-        buf.add(RH.Spot(sp, 14009.0, "K1GHL", 20, 28, now))
+    _seed(buf, now)
+    caps = {"n": 0}
 
     async def fake_tune(uri, rx, dial, sb, *rest):
         pass
 
     async def fake_capture(uri, dwell, rx):
+        caps["n"] += 1
         return 48000, np.zeros(48000, dtype="float32")
+
+    def boom(*a, **k):
+        raise AssertionError("decode must not run when no signal was verified")
 
     monkeypatch.setattr(RH, "tune_once", fake_tune)
     monkeypatch.setattr(RH, "_capture", fake_capture)
-    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: False)   # faded
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: False)   # nothing on frequency
+    monkeypatch.setattr(RH, "_decode_picks", boom)
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
-    assert rec["agree"] is False and rec.get("note") == "faded"
-    assert [p for p in Path(tmp_path).iterdir() if p.is_dir()] == []   # nothing saved
-    assert (Path(tmp_path) / "manifest.jsonl").exists()               # but logged
+    assert rec["note"] == "no-signal" and rec["saved"] is None
+    assert caps["n"] == 1                                            # only the probe, no full record
+    assert [p for p in Path(tmp_path).iterdir() if p.is_dir()] == []
+    assert (Path(tmp_path) / "manifest.jsonl").exists()
+
+
+def test_chase_once_faded_during_record_not_saved(tmp_path, monkeypatch):
+    # signal present at probe, gone during the full record -> logged, not saved
+    buf = RH.SpotBuffer(min_skimmers=4)
+    now = 1000.0
+    _seed(buf, now)
+    active_seq = iter([True, False])   # probe active, record faded
+
+    async def fake_tune(uri, rx, dial, sb, *rest):
+        pass
+
+    async def fake_capture(uri, dwell, rx):
+        return 48000, (0.1 * np.ones(48000, dtype="float32"))
+
+    monkeypatch.setattr(RH, "tune_once", fake_tune)
+    monkeypatch.setattr(RH, "_capture", fake_capture)
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: next(active_seq))
+
+    rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
+    assert rec["note"] == "faded" and rec["saved"] is None
+    assert [p for p in Path(tmp_path).iterdir() if p.is_dir()] == []
 
 
 def test_chase_once_no_candidate_returns_none(tmp_path):

@@ -312,18 +312,30 @@ async def _chase_once(buf, args, now, ranges):
     print(f"[chase] {cand.call} {cand.freq_khz:.1f}kHz {cand.skimmers} skimmers "
           f"snr{cand.peak_snr} -> dial {dial} Hz", flush=True)
     await tune_once(args.uri, args.rx, dial, args.sideband, args.pitch, args.filter_hz)
-    sr, audio = await _capture(args.uri, args.dwell, args.rx)
 
     base = {"call": cand.call, "freq_khz": cand.freq_khz, "utc": _utc_now(),
             "skimmers": cand.skimmers, "snr": cand.peak_snr, "wpm": cand.wpm}
 
+    # Verify a signal is actually present BEFORE recording: a short probe listen avoids
+    # spending a full dwell (and a decode) on a spot that has already gone quiet.
+    psr, paudio = await _capture(args.uri, args.probe, args.rx)
+    if not _is_active(paudio, psr):
+        rec = {**base, "our_pick": None, "margin": None, "agree": False,
+               "note": "no-signal", "saved": None}
+        append_manifest(args.out, rec)
+        buf._cooldown[cand.call] = now + 60.0   # short retry lockout on a dead spot
+        print(f"[skip ] {cand.call} no signal at spot -- not recorded", flush=True)
+        return rec
+
+    # Signal confirmed -> record the full sample.
+    sr, audio = await _capture(args.uri, args.dwell, args.rx)
     if not _is_active(audio, sr):
-        # No keyed CW -> the spot faded; the audio has no label value, so don't save it.
+        # Signal was there at probe but stopped mid-record (e.g. QSO ended) -> no label value.
         rec = {**base, "our_pick": None, "margin": None, "agree": False,
                "note": "faded", "saved": None}
         append_manifest(args.out, rec)
-        buf._cooldown[cand.call] = now + 60.0   # short retry lockout on a faded spot
-        print(f"[skip ] {cand.call} faded (no keyed CW) -- not saved", flush=True)
+        buf._cooldown[cand.call] = now + 60.0
+        print(f"[skip ] {cand.call} faded during record -- not saved", flush=True)
         return rec
 
     picks = _decode_picks(sr, audio, args.ckpt)
@@ -414,6 +426,8 @@ def main():
     ap.add_argument("--spot-window", type=float, default=120.0, dest="spot_window")
     ap.add_argument("--cooldown", type=float, default=600.0)
     ap.add_argument("--dwell", type=float, default=18.0)
+    ap.add_argument("--probe", type=float, default=3.0,
+                    help="short pre-capture listen (s) to confirm a signal before recording")
     ap.add_argument("--pitch", type=float, default=650.0)
     ap.add_argument("--filter-hz", type=float, default=400.0, dest="filter_hz",
                     help="narrow CW filter width Hz centered on --pitch (0 = leave radio filter)")
