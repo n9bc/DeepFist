@@ -38,6 +38,18 @@ def labeled_clips() -> list[tuple[Path, str]]:
             side = wav.with_suffix(".call")
             if side.exists():
                 out.append((wav, side.read_text().strip().upper()))
+    # Harvested anchors: Lyra-shaped dirs labeled by RBN >=4-US-skimmer consensus.
+    anc = ROOT / "runs" / "rbn_anchors"
+    if anc.is_dir():
+        for sj in sorted(anc.glob("*/session.json")):
+            try:
+                meta = json.loads(sj.read_text())
+                call = meta.get("rbn", {}).get("callsign", "").upper()
+                wav = sj.parent / meta["audio"][0]["file"]
+                if call and wav.exists():
+                    out.append((wav, call))
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
     return out
 
 
