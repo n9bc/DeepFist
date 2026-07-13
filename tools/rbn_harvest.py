@@ -88,6 +88,24 @@ def in_range(freq_khz: float, ranges: list[tuple[float, float]]) -> bool:
     return any(lo <= freq_khz <= hi for lo, hi in ranges)
 
 
+def parse_vfo_hz(msg, rx: int) -> "int | None":
+    """Extract the dial frequency (Hz) for `rx` from a TCI 'vfo:rx,chan,freq;' status
+    string, or None if this message carries no VFO for that receiver. TCI emits a state
+    burst on connect that includes the current VFO (same field scripts/tci_decode reads)."""
+    if not isinstance(msg, str):
+        return None
+    for cmd in msg.strip().split(";"):
+        if not cmd.lower().startswith("vfo:"):
+            continue
+        parts = cmd.split(":", 1)[1].split(",")
+        try:
+            if int(parts[0]) == rx:
+                return int(float(parts[-1]))
+        except (ValueError, IndexError):
+            continue
+    return None
+
+
 # --- consensus gate --------------------------------------------------------------
 @dataclass
 class Candidate:
@@ -196,6 +214,34 @@ def append_manifest(out_root, record: dict) -> None:
 
 
 # --- live I/O seams (module-level so they can be monkeypatched in tests) ----------
+async def read_vfo(uri, rx, timeout=3.0):
+    """Read the current dial frequency (Hz) for `rx` from the TCI state burst emitted on
+    connect. Returns None if nothing arrives in `timeout` s (used to restore on exit)."""
+    import websockets
+    try:
+        async with websockets.connect(uri, max_size=None, ping_interval=None) as ws:
+            end = time.time() + timeout
+            while time.time() < end:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=max(0.05, end - time.time()))
+                except asyncio.TimeoutError:
+                    break
+                hz = parse_vfo_hz(msg, rx)
+                if hz is not None:
+                    return hz
+    except Exception as e:  # noqa: BLE001 -- best-effort; absence just disables restore
+        print(f"[tci] could not read VFO: {e}", flush=True)
+    return None
+
+
+async def set_vfo(uri, rx, dial_hz):
+    """Set only the dial frequency for `rx` (used to restore the original VFO on exit)."""
+    import websockets
+    async with websockets.connect(uri, max_size=None, ping_interval=None) as ws:
+        await ws.send(f"VFO:{rx},0,{int(dial_hz)};")
+        await asyncio.sleep(0.2)
+
+
 async def tune_once(uri, rx, dial_hz, sideband):
     """Open a short-lived TCI WS, set CW mode + dial, give the radio a moment, close."""
     import websockets
@@ -302,6 +348,11 @@ async def run(args):
     buf = SpotBuffer(window_s=args.spot_window, min_skimmers=args.min_skimmers,
                      cooldown_s=args.cooldown)
     stop = asyncio.Event()
+    orig_vfo = await read_vfo(args.uri, args.rx)
+    if orig_vfo is not None:
+        print(f"[tci] original VFO {orig_vfo} Hz (restored on exit)", flush=True)
+    else:
+        print("[tci] VFO unknown at startup -- dial will NOT be restored on exit", flush=True)
     feed = asyncio.create_task(telnet_feed(args.call, buf, stop))
     print(f"harvesting: >={args.min_skimmers} skimmers, ranges={ranges or 'ALL'}, "
           f"dwell {args.dwell}s -> {args.out}", flush=True)
@@ -314,6 +365,12 @@ async def run(args):
     finally:
         stop.set()
         feed.cancel()
+        if orig_vfo is not None:
+            try:
+                await set_vfo(args.uri, args.rx, orig_vfo)
+                print(f"[tci] restored VFO to {orig_vfo} Hz", flush=True)
+            except Exception as e:  # noqa: BLE001 -- exit path, log and move on
+                print(f"[tci] VFO restore failed: {e}", flush=True)
 
 
 def main():

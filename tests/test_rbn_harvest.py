@@ -56,6 +56,15 @@ def test_range_parse_and_filter():
     assert RH.in_range(21020.0, []) is True
 
 
+def test_parse_vfo_hz():
+    # TCI state burst: 'vfo:<rx>,<chan>,<freq>' -> dial Hz for the matching rx
+    assert RH.parse_vfo_hz("vfo:0,0,14008350;", 0) == 14008350
+    assert RH.parse_vfo_hz("start;vfo:1,0,7030000;dds:0,0;", 1) == 7030000
+    assert RH.parse_vfo_hz("vfo:0,0,14008350;", 1) is None   # different rx
+    assert RH.parse_vfo_hz("ready;", 0) is None              # no vfo field
+    assert RH.parse_vfo_hz(b"\x00\x01binary", 0) is None     # non-str (audio packet)
+
+
 # --- Task 3: consensus gate ------------------------------------------------------
 def _spot(spotter, call, freq, t, snr=10, wpm=25):
     return RH.Spot(spotter=spotter, freq_khz=freq, call=call, snr_db=snr, wpm=wpm, t=t)
