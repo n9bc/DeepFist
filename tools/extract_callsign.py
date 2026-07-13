@@ -24,8 +24,10 @@ from deepfist.model.decode import greedy_ctc_decode
 CALL = re.compile(r"^[A-Z]{1,2}[0-9][A-Z]{1,4}$")
 
 
-def extract_callsign(wav_path, net, scp_set, win=6.0, hop=1.5) -> "str | None":
-    """Return the most likely callsign in a QSO clip via contest-grammar voting, or None."""
+def extract_callsign(wav_path, net, scp_set, win=6.0, hop=1.5, blank_pen=1.0) -> "str | None":
+    """Return the most likely callsign in a QSO clip via contest-grammar voting, or None.
+    blank_pen counters CTC blank over-prediction on real audio (recovers dropped chars ->
+    more well-formed call tokens); 1.0 is best on real anchors (32% vs 30% at pen=0)."""
     sr, a = wavfile.read(str(wav_path))
     if a.ndim > 1:
         a = a.mean(axis=1)
@@ -39,6 +41,8 @@ def extract_callsign(wav_path, net, scp_set, win=6.0, hop=1.5) -> "str | None":
             if len(seg) >= sr:
                 x = maybe_condition(resample_poly(seg, SAMPLE_RATE, sr).astype(np.float32), SAMPLE_RATE)
                 lp = net(audio_to_spectrogram(x, SAMPLE_RATE).unsqueeze(0).unsqueeze(0))
+                if blank_pen:
+                    lp = lp.clone(); lp[..., 0] -= blank_pen      # BLANK_ID = 0
                 toks = greedy_ctc_decode(lp)[0].split()
                 for i, tk in enumerate(toks):
                     if not CALL.match(tk):
