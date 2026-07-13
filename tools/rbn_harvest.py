@@ -88,6 +88,16 @@ def in_range(freq_khz: float, ranges: list[tuple[float, float]]) -> bool:
     return any(lo <= freq_khz <= hi for lo, hi in ranges)
 
 
+def cw_filter_band(sideband: str, pitch_hz: float, width_hz: float) -> tuple[int, int]:
+    """Audio passband (low, high) Hz for a narrow CW filter of `width_hz` centered on the
+    pitch. CWU sits on the positive (USB) audio side, CWL on the negative (LSB) side."""
+    half = width_hz / 2.0
+    sb = sideband.upper()
+    if sb.endswith("L") or sb == "LSB":
+        return int(-(pitch_hz + half)), int(-(pitch_hz - half))
+    return int(pitch_hz - half), int(pitch_hz + half)
+
+
 def parse_vfo_hz(msg, rx: int) -> "int | None":
     """Extract the dial frequency (Hz) for `rx` from a TCI 'vfo:rx,chan,freq;' status
     string, or None if this message carries no VFO for that receiver. TCI emits a state
@@ -181,9 +191,12 @@ class SpotBuffer:
 
 # --- corpus sink -----------------------------------------------------------------
 def write_sample(out_root, cand: Candidate, sideband: str, dial_hz: int, sr: int,
-                 audio, our_pick: str, margin: float, created: "datetime | None" = None) -> Path:
-    """Persist a confirmed clip as a Lyra-shaped recording dir (session.json + audio.wav)
-    so tools/rbn_confirm.py and eval_real_session.py can consume it unchanged."""
+                 audio, our_pick, margin, agree: bool = True,
+                 created: "datetime | None" = None) -> Path:
+    """Persist a >=4-skimmer-confirmed clip as a Lyra-shaped recording dir (session.json +
+    audio.wav) so tools/rbn_confirm.py and eval_real_session.py can consume it unchanged.
+    The RBN consensus (rbn.callsign) is the training label; decode.* is our model's attempt
+    and `agree` records whether it matched -- saved regardless so hard cases aren't lost."""
     import numpy as np
     from scipy.io import wavfile
     created = created or datetime.now(timezone.utc)
@@ -201,7 +214,7 @@ def write_sample(out_root, cand: Candidate, sideband: str, dial_hz: int, sr: int
             "callsign": cand.call, "skimmers": cand.skimmers,
             "peak_snr": cand.peak_snr, "wpm": cand.wpm, "spotters": cand.spotters,
         },
-        "decode": {"our_pick": our_pick, "margin": margin, "agree": True},
+        "decode": {"our_pick": our_pick, "margin": margin, "agree": bool(agree)},
     }
     (d / "session.json").write_text(json.dumps(session, indent=2))
     return d
@@ -242,12 +255,16 @@ async def set_vfo(uri, rx, dial_hz):
         await asyncio.sleep(0.2)
 
 
-async def tune_once(uri, rx, dial_hz, sideband):
-    """Open a short-lived TCI WS, set CW mode + dial, give the radio a moment, close."""
+async def tune_once(uri, rx, dial_hz, sideband, pitch=650.0, filter_hz=0.0):
+    """Open a short-lived TCI WS, set CW mode + dial, optionally narrow the CW filter to
+    isolate the target from adjacent QRM, give the radio a moment, close."""
     import websockets
     async with websockets.connect(uri, max_size=None, ping_interval=None) as ws:
         await ws.send(f"MODULATION:{rx},cw;")
         await ws.send(f"VFO:{rx},0,{int(dial_hz)};")
+        if filter_hz and filter_hz > 0:
+            lo, hi = cw_filter_band(sideband, pitch, filter_hz)
+            await ws.send(f"RX_FILTER_BAND:{rx},{lo},{hi};")
         await asyncio.sleep(0.4)
 
 
@@ -294,30 +311,34 @@ async def _chase_once(buf, args, now, ranges):
     dial = dial_hz_for(cand.freq_khz, args.sideband, args.pitch)
     print(f"[chase] {cand.call} {cand.freq_khz:.1f}kHz {cand.skimmers} skimmers "
           f"snr{cand.peak_snr} -> dial {dial} Hz", flush=True)
-    await tune_once(args.uri, args.rx, dial, args.sideband)
+    await tune_once(args.uri, args.rx, dial, args.sideband, args.pitch, args.filter_hz)
     sr, audio = await _capture(args.uri, args.dwell, args.rx)
 
     base = {"call": cand.call, "freq_khz": cand.freq_khz, "utc": _utc_now(),
             "skimmers": cand.skimmers, "snr": cand.peak_snr, "wpm": cand.wpm}
 
     if not _is_active(audio, sr):
-        rec = {**base, "our_pick": None, "margin": None, "agree": False, "note": "faded"}
+        # No keyed CW -> the spot faded; the audio has no label value, so don't save it.
+        rec = {**base, "our_pick": None, "margin": None, "agree": False,
+               "note": "faded", "saved": None}
         append_manifest(args.out, rec)
         buf._cooldown[cand.call] = now + 60.0   # short retry lockout on a faded spot
-        print(f"[miss ] {cand.call} faded (no keyed CW)", flush=True)
+        print(f"[skip ] {cand.call} faded (no keyed CW) -- not saved", flush=True)
         return rec
 
     picks = _decode_picks(sr, audio, args.ckpt)
     agree = cand.call in picks
     our_pick = cand.call if agree else (max(picks, key=picks.get) if picks else None)
     margin = picks.get(our_pick) if our_pick else None
-    rec = {**base, "our_pick": our_pick, "margin": margin, "agree": agree}
+    # The >=4-skimmer RBN consensus IS the ground-truth label, independent of whether our
+    # (weaker) model agreed -> always harvest the real audio; `agree` is recorded metadata.
+    d = write_sample(args.out, cand, args.sideband, dial, sr, audio, our_pick, margin, agree=agree)
+    rec = {**base, "our_pick": our_pick, "margin": margin, "agree": agree, "saved": d.name}
     append_manifest(args.out, rec)
-    if agree:
-        d = write_sample(args.out, cand, args.sideband, dial, sr, audio, cand.call, margin)
-        print(f"[AGREE] {cand.call} <-> ours {margin:.1f} nats  saved {d.name}", flush=True)
-    else:
-        print(f"[miss ] RBN {cand.call} != ours {our_pick}", flush=True)
+    tag = "AGREE" if agree else "label"
+    mtxt = f"{margin:.1f}" if margin is not None else "--"
+    print(f"[{tag:5}] {cand.call} ({cand.skimmers} skim) ours={our_pick} m={mtxt}  "
+          f"saved {d.name}", flush=True)
     return rec
 
 
@@ -385,6 +406,8 @@ def main():
     ap.add_argument("--cooldown", type=float, default=600.0)
     ap.add_argument("--dwell", type=float, default=18.0)
     ap.add_argument("--pitch", type=float, default=650.0)
+    ap.add_argument("--filter-hz", type=float, default=400.0, dest="filter_hz",
+                    help="narrow CW filter width Hz centered on --pitch (0 = leave radio filter)")
     ap.add_argument("--sideband", default="CWU")
     ap.add_argument("--ckpt", default="runs/exp15/model.pt")
     ap.add_argument("--out", default="runs/rbn_harvest")

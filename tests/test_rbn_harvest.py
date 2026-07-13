@@ -56,6 +56,13 @@ def test_range_parse_and_filter():
     assert RH.in_range(21020.0, []) is True
 
 
+def test_cw_filter_band():
+    # CWU: positive audio passband centered on pitch
+    assert RH.cw_filter_band("CWU", 650, 400) == (450, 850)
+    # CWL: mirror onto the negative side
+    assert RH.cw_filter_band("CWL", 650, 400) == (-850, -450)
+
+
 def test_parse_vfo_hz():
     # TCI state burst: 'vfo:<rx>,<chan>,<freq>' -> dial Hz for the matching rx
     assert RH.parse_vfo_hz("vfo:0,0,14008350;", 0) == 14008350
@@ -132,7 +139,7 @@ def test_append_manifest_jsonl(tmp_path):
 # --- Task 5: orchestrator --------------------------------------------------------
 def _args(tmp_path, **over):
     a = types.SimpleNamespace(
-        uri="ws://x", rx=0, sideband="CWU", pitch=650, dwell=18,
+        uri="ws://x", rx=0, sideband="CWU", pitch=650, dwell=18, filter_hz=400,
         ckpt="runs/exp15/model.pt", out=str(tmp_path),
     )
     a.__dict__.update(over)
@@ -147,8 +154,9 @@ def test_chase_once_writes_sample_on_agreement(tmp_path, monkeypatch):
 
     tuned = {}
 
-    async def fake_tune(uri, rx, dial, sb):
+    async def fake_tune(uri, rx, dial, sb, *rest):
         tuned["dial"] = dial
+        tuned["rest"] = rest   # (pitch, filter_hz)
 
     async def fake_capture(uri, dwell, rx):
         return 48000, (0.1 * np.ones(48000, dtype="float32"))
@@ -161,19 +169,21 @@ def test_chase_once_writes_sample_on_agreement(tmp_path, monkeypatch):
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
     assert rec["agree"] is True and rec["our_pick"] == "K1GHL"
     assert tuned["dial"] == 14009000 - 650
+    assert tuned["rest"] == (650, 400)          # pitch + filter forwarded to tune_once
     dirs = [p for p in Path(tmp_path).iterdir() if p.is_dir()]
     assert len(dirs) == 1 and "K1GHL" in dirs[0].name
     assert (Path(tmp_path) / "manifest.jsonl").exists()
     assert buf.ready_candidates(now) == []   # on cooldown after chase
 
 
-def test_chase_once_disagreement_writes_no_wav_dir(tmp_path, monkeypatch):
+def test_chase_once_disagreement_still_saves_labeled_sample(tmp_path, monkeypatch):
+    # save-on-consensus: RBN >=4-skimmer call is the label even when our decode disagrees
     buf = RH.SpotBuffer(min_skimmers=4)
     now = 1000.0
     for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
         buf.add(RH.Spot(sp, 14009.0, "K1GHL", 20, 28, now))
 
-    async def fake_tune(uri, rx, dial, sb):
+    async def fake_tune(uri, rx, dial, sb, *rest):
         pass
 
     async def fake_capture(uri, dwell, rx):
@@ -186,8 +196,33 @@ def test_chase_once_disagreement_writes_no_wav_dir(tmp_path, monkeypatch):
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
     assert rec["agree"] is False and rec["our_pick"] == "W1AW"
-    assert [p for p in Path(tmp_path).iterdir() if p.is_dir()] == []
-    assert (Path(tmp_path) / "manifest.jsonl").exists()
+    dirs = [p for p in Path(tmp_path).iterdir() if p.is_dir()]
+    assert len(dirs) == 1 and "K1GHL" in dirs[0].name    # saved, labeled by RBN
+    sj = json.loads((dirs[0] / "session.json").read_text())
+    assert sj["rbn"]["callsign"] == "K1GHL"              # training label = RBN consensus
+    assert sj["decode"]["agree"] is False and sj["decode"]["our_pick"] == "W1AW"
+
+
+def test_chase_once_faded_not_saved(tmp_path, monkeypatch):
+    buf = RH.SpotBuffer(min_skimmers=4)
+    now = 1000.0
+    for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
+        buf.add(RH.Spot(sp, 14009.0, "K1GHL", 20, 28, now))
+
+    async def fake_tune(uri, rx, dial, sb, *rest):
+        pass
+
+    async def fake_capture(uri, dwell, rx):
+        return 48000, np.zeros(48000, dtype="float32")
+
+    monkeypatch.setattr(RH, "tune_once", fake_tune)
+    monkeypatch.setattr(RH, "_capture", fake_capture)
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: False)   # faded
+
+    rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
+    assert rec["agree"] is False and rec.get("note") == "faded"
+    assert [p for p in Path(tmp_path).iterdir() if p.is_dir()] == []   # nothing saved
+    assert (Path(tmp_path) / "manifest.jsonl").exists()               # but logged
 
 
 def test_chase_once_no_candidate_returns_none(tmp_path):
