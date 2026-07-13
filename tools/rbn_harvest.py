@@ -377,10 +377,19 @@ async def run(args):
     feed = asyncio.create_task(telnet_feed(args.call, buf, stop))
     print(f"harvesting: >={args.min_skimmers} skimmers, ranges={ranges or 'ALL'}, "
           f"dwell {args.dwell}s -> {args.out}", flush=True)
+    from websockets.exceptions import WebSocketException
+    tci_down = (OSError, asyncio.TimeoutError, WebSocketException)
     try:
         while True:
-            if await _chase_once(buf, args, time.time(), ranges) is None:
-                await asyncio.sleep(2.0)
+            try:
+                if await _chase_once(buf, args, time.time(), ranges) is None:
+                    await asyncio.sleep(2.0)
+            except tci_down as e:
+                # Radio/TCI dropped (e.g. the SDR app restarted) -- survive it and keep the
+                # RBN feed + spot buffer alive; retry shortly instead of crashing the session.
+                print(f"[tci] radio unreachable ({e.__class__.__name__}); retrying in 5s",
+                      flush=True)
+                await asyncio.sleep(5.0)
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nstopping.", flush=True)
     finally:

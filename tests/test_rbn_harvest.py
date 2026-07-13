@@ -228,3 +228,36 @@ def test_chase_once_faded_not_saved(tmp_path, monkeypatch):
 def test_chase_once_no_candidate_returns_none(tmp_path):
     buf = RH.SpotBuffer(min_skimmers=4)
     assert asyncio.run(RH._chase_once(buf, _args(tmp_path), 1000.0, ranges=[])) is None
+
+
+def test_run_survives_tci_drop(tmp_path, monkeypatch):
+    # A radio/TCI drop mid-chase must not crash the session -- it should log and retry.
+    calls = {"n": 0}
+
+    async def flaky_chase(buf, args, now, ranges):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionRefusedError("tci down")   # radio dropped
+        raise asyncio.CancelledError()                  # 2nd loop: end the run cleanly
+
+    async def noop_feed(call, buf, stop):
+        while not stop.is_set():
+            await asyncio.sleep(0)
+
+    async def noop_read_vfo(uri, rx, timeout=3.0):
+        return None
+
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_s):
+        await real_sleep(0)
+
+    monkeypatch.setattr(RH, "_chase_once", flaky_chase)
+    monkeypatch.setattr(RH, "telnet_feed", noop_feed)
+    monkeypatch.setattr(RH, "read_vfo", noop_read_vfo)
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    args = _args(tmp_path, call="WI9FD", range=[], min_skimmers=4,
+                 spot_window=120, cooldown=600)
+    asyncio.run(RH.run(args))          # must return, not raise ConnectionRefused
+    assert calls["n"] == 2             # 1st raised+caught, loop continued to 2nd
