@@ -63,6 +63,35 @@ def test_cw_filter_band():
     assert RH.cw_filter_band("CWL", 650, 400) == (-850, -450)
 
 
+def test_is_us_spotter():
+    for us in ("W3LPL", "K3PA", "N2CR", "AC0C", "AA1A", "WE9V", "KM3T", "AL7Q"):
+        assert RH.is_us_spotter(us), us
+    for dx in ("DL8TG", "G4IRN", "EA2CW", "VE3MA", "OK1HRA", "AM5X", "PY2KNK"):
+        assert not RH.is_us_spotter(dx), dx
+
+
+def test_is_keyed_signal():
+    sr = 8000
+    t = np.arange(sr * 2) / sr
+    tone = np.sin(2 * np.pi * 700 * t)
+    keyed = tone * (np.floor(t / 0.08) % 2 == 0).astype(float)   # 80 ms on/off keying
+    assert RH.is_keyed_signal(keyed, sr) is True
+    assert RH.is_keyed_signal(tone, sr) is False                  # steady carrier, not keyed
+    noise = np.random.default_rng(0).standard_normal(sr * 2)
+    assert RH.is_keyed_signal(noise, sr) is False                 # AGC-noise-like
+    assert RH.is_keyed_signal(np.zeros(sr * 2), sr) is False
+
+
+def test_us_spotter_filter_gates_consensus():
+    buf = RH.SpotBuffer(min_skimmers=3, us_only=True)
+    now = 1000.0
+    for sp in ("K1AA", "N2BB", "DL3CC", "G4DD"):     # 2 US, 2 DX on one frequency
+        buf.add(RH.Spot(sp, 7020.0, "DX1ABC", 20, 25, now))
+    assert buf.ready_candidates(now) == []            # only 2 US spotters -> below 3
+    buf.add(RH.Spot("W5EE", 7020.0, "DX1ABC", 20, 25, now))
+    assert len(buf.ready_candidates(now)) == 1        # 3 US spotters -> fires
+
+
 def test_parse_vfo_hz():
     # TCI state burst: 'vfo:<rx>,<chan>,<freq>' -> dial Hz for the matching rx
     assert RH.parse_vfo_hz("vfo:0,0,14008350;", 0) == 14008350
@@ -78,7 +107,7 @@ def _spot(spotter, call, freq, t, snr=10, wpm=25):
 
 
 def test_gate_fires_at_four_distinct_spotters():
-    buf = RH.SpotBuffer(window_s=120, min_skimmers=4, freq_tol_khz=0.3)
+    buf = RH.SpotBuffer(window_s=120, min_skimmers=4, freq_tol_khz=0.3, us_only=False)
     now = 1000.0
     for sp in ("AA1A", "BB2B", "CC3C"):
         buf.add(_spot(sp, "K1GHL", 14009.0, now))
@@ -95,7 +124,8 @@ def test_gate_fires_at_four_distinct_spotters():
 
 def test_gate_respects_freq_cluster_time_window_and_cooldown():
     # window spans the cooldown so the re-chase path is exercised independently of eviction
-    buf = RH.SpotBuffer(window_s=2000, min_skimmers=4, freq_tol_khz=0.3, cooldown_s=600)
+    buf = RH.SpotBuffer(window_s=2000, min_skimmers=4, freq_tol_khz=0.3, cooldown_s=600,
+                        us_only=False)
     now = 1000.0
     buf.add(_spot("AA1A", "K1GHL", 14009.0, now))
     buf.add(_spot("BB2B", "K1GHL", 14009.1, now))
@@ -140,14 +170,14 @@ def test_append_manifest_jsonl(tmp_path):
 def _args(tmp_path, **over):
     a = types.SimpleNamespace(
         uri="ws://x", rx=0, sideband="CWU", pitch=650, dwell=18, probe=3, filter_hz=400,
-        ckpt="runs/exp15/model.pt", out=str(tmp_path),
+        key_cov=0.65, us_only=True, ckpt="runs/exp15/model.pt", out=str(tmp_path),
     )
     a.__dict__.update(over)
     return a
 
 
 def test_chase_once_writes_sample_on_agreement(tmp_path, monkeypatch):
-    buf = RH.SpotBuffer(min_skimmers=4)
+    buf = RH.SpotBuffer(min_skimmers=4, us_only=False)
     now = 1000.0
     for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
         buf.add(RH.Spot(sp, 14009.0, "K1GHL", 20, 28, now))
@@ -163,7 +193,7 @@ def test_chase_once_writes_sample_on_agreement(tmp_path, monkeypatch):
 
     monkeypatch.setattr(RH, "tune_once", fake_tune)
     monkeypatch.setattr(RH, "_capture", fake_capture)
-    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: True)
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr, *a: True)
     monkeypatch.setattr(RH, "_decode_picks", lambda sr, audio, ckpt: {"K1GHL": 7.4, "W1AW": 1.1})
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
@@ -178,7 +208,7 @@ def test_chase_once_writes_sample_on_agreement(tmp_path, monkeypatch):
 
 def test_chase_once_disagreement_still_saves_labeled_sample(tmp_path, monkeypatch):
     # save-on-consensus: RBN >=4-skimmer call is the label even when our decode disagrees
-    buf = RH.SpotBuffer(min_skimmers=4)
+    buf = RH.SpotBuffer(min_skimmers=4, us_only=False)
     now = 1000.0
     for sp in ("AA1A", "BB2B", "CC3C", "DD4D"):
         buf.add(RH.Spot(sp, 14009.0, "K1GHL", 20, 28, now))
@@ -191,7 +221,7 @@ def test_chase_once_disagreement_still_saves_labeled_sample(tmp_path, monkeypatc
 
     monkeypatch.setattr(RH, "tune_once", fake_tune)
     monkeypatch.setattr(RH, "_capture", fake_capture)
-    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: True)
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr, *a: True)
     monkeypatch.setattr(RH, "_decode_picks", lambda sr, audio, ckpt: {"W1AW": 3.0})
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
@@ -210,7 +240,7 @@ def _seed(buf, now, call="K1GHL"):
 
 def test_chase_once_verifies_signal_before_recording(tmp_path, monkeypatch):
     # no signal at the probe -> must NOT record the full sample or decode
-    buf = RH.SpotBuffer(min_skimmers=4)
+    buf = RH.SpotBuffer(min_skimmers=4, us_only=False)
     now = 1000.0
     _seed(buf, now)
     caps = {"n": 0}
@@ -227,7 +257,7 @@ def test_chase_once_verifies_signal_before_recording(tmp_path, monkeypatch):
 
     monkeypatch.setattr(RH, "tune_once", fake_tune)
     monkeypatch.setattr(RH, "_capture", fake_capture)
-    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: False)   # nothing on frequency
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr, *a: False)   # nothing on frequency
     monkeypatch.setattr(RH, "_decode_picks", boom)
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
@@ -239,7 +269,7 @@ def test_chase_once_verifies_signal_before_recording(tmp_path, monkeypatch):
 
 def test_chase_once_faded_during_record_not_saved(tmp_path, monkeypatch):
     # signal present at probe, gone during the full record -> logged, not saved
-    buf = RH.SpotBuffer(min_skimmers=4)
+    buf = RH.SpotBuffer(min_skimmers=4, us_only=False)
     now = 1000.0
     _seed(buf, now)
     active_seq = iter([True, False])   # probe active, record faded
@@ -252,7 +282,7 @@ def test_chase_once_faded_during_record_not_saved(tmp_path, monkeypatch):
 
     monkeypatch.setattr(RH, "tune_once", fake_tune)
     monkeypatch.setattr(RH, "_capture", fake_capture)
-    monkeypatch.setattr(RH, "_is_active", lambda audio, sr: next(active_seq))
+    monkeypatch.setattr(RH, "_is_active", lambda audio, sr, *a: next(active_seq))
 
     rec = asyncio.run(RH._chase_once(buf, _args(tmp_path), now, ranges=[]))
     assert rec["note"] == "faded" and rec["saved"] is None
@@ -260,7 +290,7 @@ def test_chase_once_faded_during_record_not_saved(tmp_path, monkeypatch):
 
 
 def test_chase_once_no_candidate_returns_none(tmp_path):
-    buf = RH.SpotBuffer(min_skimmers=4)
+    buf = RH.SpotBuffer(min_skimmers=4, us_only=False)
     assert asyncio.run(RH._chase_once(buf, _args(tmp_path), 1000.0, ranges=[])) is None
 
 

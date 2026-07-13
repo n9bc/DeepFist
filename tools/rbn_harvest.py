@@ -66,6 +66,47 @@ def parse_rbn_line(line: str, now: float | None = None) -> "Spot | None":
     )
 
 
+def is_us_spotter(call: str) -> bool:
+    """True if `call` is a US amateur callsign (K/N/W prefix, or A followed by A-L).
+    Used to keep only spots from skimmers that actually hear the signal in the US, so we
+    tune to stations reaching the operator's antenna rather than DX only distant sites hear."""
+    c = (call or "").upper().split("/")[0]
+    if not c:
+        return False
+    if c[0] in ("K", "N", "W"):
+        return True
+    return c[0] == "A" and len(c) >= 2 and "A" <= c[1] <= "L"
+
+
+def is_keyed_signal(audio, sr, cov_thresh: float = 0.65) -> bool:
+    """True if the audio contains an on/off-KEYED tone (real CW), not just energy.
+
+    Distinguishes a genuine CW station from AGC-amplified band noise in the pitch-centered
+    CW filter: the envelope coefficient-of-variation (std/mean) of narrow-band noise is
+    ~0.52 (Rayleigh), while keyed CW swings between key-down and key-up for ~0.8+. Measured
+    live: real stations 0.76-0.86, empty-frequency AGC hiss 0.51-0.58."""
+    import numpy as np
+    a = np.asarray(audio, dtype=np.float64)
+    if a.size < sr // 2:                       # need >= 0.5 s to judge keying
+        return False
+    w = np.hanning(len(a))
+    S = np.abs(np.fft.rfft(a * w))
+    f = np.fft.rfftfreq(len(a), 1.0 / sr)
+    m = (f >= 300) & (f <= 1000)
+    if not m.any() or S[m].max() <= 0:
+        return False
+    tone = float(f[m][np.argmax(S[m])])
+    t = np.arange(len(a)) / sr
+    k = max(1, int(0.004 * sr))
+    kern = np.ones(k) / k
+    i = np.convolve(a * np.cos(2 * np.pi * tone * t), kern, "same")
+    q = np.convolve(a * np.sin(2 * np.pi * tone * t), kern, "same")
+    env = np.sqrt(i * i + q * q)
+    if env.mean() <= 0:
+        return False
+    return float(env.std() / env.mean()) > cov_thresh
+
+
 # --- tuning math + band filter ---------------------------------------------------
 def dial_hz_for(signal_khz: float, sideband: str, pitch_hz: float) -> int:
     """Dial frequency (Hz) that places the RBN signal at our model's audio pitch.
@@ -131,15 +172,19 @@ class SpotBuffer:
     """Rolling aggregator that fires when >=min_skimmers distinct spotters agree on
     a call within a frequency cluster and time window. Per-call cooldown after chase."""
 
-    def __init__(self, window_s=120.0, min_skimmers=4, freq_tol_khz=0.3, cooldown_s=600.0):
+    def __init__(self, window_s=120.0, min_skimmers=4, freq_tol_khz=0.3, cooldown_s=600.0,
+                 us_only=True):
         self.window_s = window_s
         self.min_skimmers = min_skimmers
         self.freq_tol = freq_tol_khz
         self.cooldown_s = cooldown_s
+        self.us_only = us_only
         self._spots: list[Spot] = []
         self._cooldown: dict[str, float] = {}
 
     def add(self, spot: Spot) -> None:
+        if self.us_only and not is_us_spotter(spot.spotter):
+            return                             # only US skimmers count toward consensus
         self._spots.append(spot)
 
     def mark_chased(self, call: str, now: float) -> None:
@@ -274,12 +319,11 @@ async def _capture(uri, dwell, rx):
     return await capture(uri, dwell, rx)
 
 
-def _is_active(audio, sr):
-    """True if keyed CW is present (spot not faded). Reuses scripts/tci_decode."""
-    import numpy as np
-    from scripts.tci_decode import cw_activity
-    active, _pitch = cw_activity(np.asarray(audio, dtype=np.float32), sr)
-    return bool(active)
+def _is_active(audio, sr, cov_thresh=0.65):
+    """True if on/off-KEYED CW is present -- not merely energy in the passband. Uses the
+    envelope-CoV test so AGC-amplified band noise (which fills the pitch-centered CW filter
+    on an empty frequency) is NOT mistaken for a station. See is_keyed_signal."""
+    return is_keyed_signal(audio, sr, cov_thresh)
 
 
 def _decode_picks(sr, audio, ckpt):
@@ -319,7 +363,7 @@ async def _chase_once(buf, args, now, ranges):
     # Verify a signal is actually present BEFORE recording: a short probe listen avoids
     # spending a full dwell (and a decode) on a spot that has already gone quiet.
     psr, paudio = await _capture(args.uri, args.probe, args.rx)
-    if not _is_active(paudio, psr):
+    if not _is_active(paudio, psr, args.key_cov):
         rec = {**base, "our_pick": None, "margin": None, "agree": False,
                "note": "no-signal", "saved": None}
         append_manifest(args.out, rec)
@@ -329,7 +373,7 @@ async def _chase_once(buf, args, now, ranges):
 
     # Signal confirmed -> record the full sample.
     sr, audio = await _capture(args.uri, args.dwell, args.rx)
-    if not _is_active(audio, sr):
+    if not _is_active(audio, sr, args.key_cov):
         # Signal was there at probe but stopped mid-record (e.g. QSO ended) -> no label value.
         rec = {**base, "our_pick": None, "margin": None, "agree": False,
                "note": "faded", "saved": None}
@@ -379,7 +423,7 @@ async def telnet_feed(call, buf, stop):
 async def run(args):
     ranges = [parse_range(r) for r in args.range]
     buf = SpotBuffer(window_s=args.spot_window, min_skimmers=args.min_skimmers,
-                     cooldown_s=args.cooldown)
+                     cooldown_s=args.cooldown, us_only=args.us_only)
     stop = asyncio.Event()
     orig_vfo = await read_vfo(args.uri, args.rx)
     if orig_vfo is not None:
@@ -423,6 +467,10 @@ def main():
     ap.add_argument("--range", action="append", default=[],
                     help="receivable kHz window LO-HI (repeatable); default = accept all")
     ap.add_argument("--min-skimmers", type=int, default=4, dest="min_skimmers")
+    ap.add_argument("--any-spotter", action="store_false", dest="us_only",
+                    help="count spots from any skimmer (default: US spotters only)")
+    ap.add_argument("--key-cov", type=float, default=0.65,
+                    help="min envelope CoV to accept a signal as keyed CW (vs AGC noise)")
     ap.add_argument("--spot-window", type=float, default=120.0, dest="spot_window")
     ap.add_argument("--cooldown", type=float, default=600.0)
     ap.add_argument("--dwell", type=float, default=18.0)
