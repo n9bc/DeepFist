@@ -94,8 +94,80 @@ def _exchange(rng):
     return _power(rng)           # ARRL DX from DX side -> power
 
 
+# --- rag-chew (conversational QSO) vocabulary ------------------------------------
+_NAMES = ["JOHN", "BOB", "JIM", "TOM", "MIKE", "DAVE", "BILL", "STEVE", "DAN", "RON",
+          "GARY", "KEN", "ED", "FRANK", "PAUL", "JACK", "LARRY", "CARL", "HANK", "AL",
+          "PETE", "RAY", "DON", "JOE", "RICK", "WALT", "CHUCK", "GENE", "ART", "LOU"]
+_CITIES = ["BOSTON", "NEW YORK", "CHICAGO", "DENVER", "DALLAS", "SEATTLE", "MIAMI",
+           "ATLANTA", "PHOENIX", "AUSTIN", "PORTLAND", "TAMPA", "RENO", "OMAHA",
+           "TULSA", "AKRON", "FARGO", "BOISE", "SALEM", "TROY", "MESA", "ERIE"]
+_RIGS = ["FT991", "IC7300", "K3", "TS590", "KX3", "FLEX", "IC7610", "FT817", "TS890",
+         "K4", "FTDX10", "IC705", "HOMEBREW", "HB", "FT101", "TS520", "ARGO"]
+_ANTS = ["DIPOLE", "VERTICAL", "YAGI", "GP", "LW", "EFHW", "LOOP", "G5RV", "BEAM",
+         "INV V", "HEXBEAM", "MONOBANDER", "WINDOM", "SLOPER", "END FED", "40M DIPOLE"]
+_WX = ["SUNNY", "RAIN", "CLOUDY", "SNOW", "CLEAR", "WINDY", "COLD", "HOT", "FOG",
+       "WARM", "COOL", "NICE WX", "RAINY", "MILD", "HAZY"]
+_GREET = ["GM", "GA", "GE", "GM DR OM", "GE DR OM", "GA OM", "GM OM", "GE OM", "GD"]
+_RST = ["599", "579", "589", "559", "449", "569", "578", "339", "588", "459"]
+
+
+def _rst(rng):
+    return _cut(rng.choice(_RST), rng) if rng.random() < 0.4 else str(rng.choice(_RST))
+
+
+def _ragchew(rng):
+    """One over of a conversational CW QSO, built from real operating shorthand."""
+    call, me = _callsign(rng), _callsign(rng)
+    nm = str(rng.choice(_NAMES))
+    r = rng.random()
+    if r < 0.15:                       # CQ / calling
+        return rng.choice([f"CQ CQ DE {me} {me} K", f"CQ CQ CQ DE {me} {me} {me} K",
+                           f"CQ DE {me} {me} K", f"QRZ DE {me} K"])
+    if r < 0.28:                       # answer
+        return rng.choice([f"{call} DE {me} {me} K", f"{call} DE {me} = GE = KN",
+                           f"{me} DE {call} K"])
+    if r < 0.75:                       # info exchange (the meat of a rag-chew)
+        bits = [str(rng.choice(_GREET))]
+        if rng.random() < 0.7:
+            bits.append(rng.choice([f"TNX FER CALL", f"TKS FER QSO", f"MNI TNX FER RPRT",
+                                    f"FB {nm}", f"UFB SIG"]))
+        if rng.random() < 0.85:
+            bits.append(f"UR RST {_rst(rng)} {_rst(rng)}")
+        if rng.random() < 0.8:
+            bits.append(rng.choice([f"QTH {rng.choice(_CITIES)}", f"QTH IS {rng.choice(_CITIES)}",
+                                    f"HR IN {rng.choice(_CITIES)}"]))
+        if rng.random() < 0.8:
+            bits.append(rng.choice([f"NAME {nm}", f"NAME IS {nm}", f"OP {nm} {nm}"]))
+        if rng.random() < 0.5:
+            bits.append(rng.choice([f"RIG {rng.choice(_RIGS)} ES ANT {rng.choice(_ANTS)}",
+                                    f"RIG IS {rng.choice(_RIGS)}", f"ANT {rng.choice(_ANTS)}",
+                                    f"PWR {int(rng.integers(5, 100))}W"]))
+        if rng.random() < 0.4:
+            bits.append(rng.choice([f"WX {rng.choice(_WX)}", f"WX IS {rng.choice(_WX)} HR"]))
+        body = " = ".join(bits)
+        return rng.choice([f"{call} DE {me} = {body} = HW? {call} DE {me} KN",
+                           f"{call} DE {me} = {body} = BK",
+                           f"R R = {body} = HW CPY? {call} DE {me} KN"])
+    if r < 0.9:                        # sign-off
+        return rng.choice([f"{call} DE {me} = TNX FER FB QSO {nm} = HPE CUAGN = 73 ES GB = {call} DE {me} SK",
+                           f"{call} DE {me} = MNI TNX = 73 73 = {me} SK",
+                           f"R FB {nm} = TNX QSO = 73 ES CUL = {call} DE {me} SK",
+                           f"{call} DE {me} = GB {nm} = 73 = SK"])
+    # short acks / fills
+    return rng.choice([f"{call} DE {me} = R R = SRI QRM = PSE RPT UR NAME = KN",
+                       f"AGN? PSE AGN = {call} DE {me} KN", f"R R FB = QSL = BK",
+                       f"NIL = PSE RPT = KN", f"{me} = QRZ? = K"])
+
+
 def random_message(rng: np.random.Generator, max_tokens: int = 40) -> str:
-    """One realistic contest utterance."""
+    """One realistic on-air utterance: ~half contest, ~half conversational rag-chew."""
+    if rng.random() < 0.5:
+        msg = _ragchew(rng)
+        toks = text_to_tokens(msg)
+        while len(toks) > max_tokens and " " in msg:
+            msg = msg.rsplit(" ", 1)[0]
+            toks = text_to_tokens(msg)
+        return msg or "TEST"
     call = _callsign(rng)
     roll = rng.random()
 
