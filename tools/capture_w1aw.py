@@ -19,7 +19,7 @@ from scipy.io import wavfile
 
 URI = "ws://127.0.0.1:40001"
 DIAL_HZ = 14047500          # 14.0475 MHz — W1AW 20m CW code practice
-SECONDS = 900               # 15 minutes
+SECONDS = 1800              # 30 minutes (cover a full code-practice session)
 
 
 async def run():
