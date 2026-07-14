@@ -27,12 +27,15 @@ import torch
 import websockets
 from scipy.signal import decimate
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from deepfist.features.spectrogram import audio_to_spectrogram
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tools"))
+from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
+from deepfist.features.conditioner import condition
 from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import ids_to_text, BLANK_ID
+from squelch import has_signal, DEFAULT_THRESH
 
-MODEL_SR = 8000
+MODEL_SR = SAMPLE_RATE          # 3200 Hz — must match the trained model
 HDR = 64
 TYPE_RX_AUDIO = 1
 
@@ -60,32 +63,13 @@ def greedy_frames(log_probs, blank_pen):
     return ids, frames, len(args)
 
 
-def cw_activity(a, sr):
-    """Independent detector: keyed CW present in this window? Returns (bool, pitch)."""
-    w = np.hanning(len(a))
-    S = np.abs(np.fft.rfft(a * w)); f = np.fft.rfftfreq(len(a), 1.0 / sr)
-    m = (f >= 300) & (f <= 1000)
-    if not m.any():
-        return False, 0.0
-    pitch = float(f[m][np.argmax(S[m])])
-    t = np.arange(len(a)) / sr
-    k = max(1, int(0.004 * sr)); kern = np.ones(k) / k
-    i = np.convolve(a * np.cos(2 * np.pi * pitch * t), kern, "same")
-    q = np.convolve(a * np.sin(2 * np.pi * pitch * t), kern, "same")
-    env = 2 * np.sqrt(i * i + q * q)
-    if env.max() <= 0:
-        return False, pitch
-    e = env / env.max()
-    on, off = e > 0.5, e < 0.15
-    if on.sum() < 0.03 * len(e) or off.sum() < 0.10 * len(e):
-        return False, pitch
-    snr = 20 * np.log10((np.median(e[on]) + 1e-9) / (np.median(e[off]) + 1e-9))
-    return (snr > 6.0 and 0.03 < on.mean() < 0.9), pitch
-
-
-async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
+async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch):
+    import json
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    net = CwCtcNet(time_downsample=2).to(device)
+    cfg_path = Path(ckpt).parent / "config.json"
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    net = CwCtcNet(time_downsample=cfg.get("time_downsample", 2),
+                   width=cfg.get("width", 1.0)).to(device)
     net.load_state_dict(torch.load(ckpt, map_location=device))
     net.eval()
 
@@ -122,7 +106,8 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
                     state["factor"] = max(1, round(sr / MODEL_SR))
                     ring = np.zeros(int(window * sr), dtype=np.float32)
                     print(f"RX {sr} Hz x{ch} -> {MODEL_SR} Hz | model={Path(ckpt).parent.name} "
-                          f"pen={blank_pen} window={window}s tick={tick}s\n", flush=True)
+                          f"pen={blank_pen} squelch={squelch} window={window}s tick={tick}s\n",
+                          flush=True)
                 n = len(mono)
                 state["total"] += n
                 if n >= len(ring):
@@ -154,7 +139,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
                 buf = ring.copy()
                 audio = decimate(buf, state["factor"], ftype="fir").astype(np.float32) \
                     if state["factor"] > 1 else buf
-                active, _pitch = cw_activity(audio, MODEL_SR)
+                active, _score = has_signal(audio, MODEL_SR, squelch)   # keying gate on RAW audio
                 if not active:
                     if not idle_gap:
                         sys.stdout.write(" "); sys.stdout.flush(); idle_gap = True
@@ -164,7 +149,8 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
                     continue
                 idle_gap = False
                 with torch.no_grad():
-                    spec = audio_to_spectrogram(audio, MODEL_SR).unsqueeze(0).unsqueeze(0).to(device)
+                    cond = condition(audio, MODEL_SR)   # AGC + tone-lock + bandpass — model expects this
+                    spec = audio_to_spectrogram(cond, MODEL_SR).unsqueeze(0).unsqueeze(0).to(device)
                     ids, frames, T = greedy_frames(net(spec), blank_pen)
                 # Commit the newly-settled time band (committed_t, audio_end-guard]
                 # exactly once. Advancing the boundary by settled time (not by the
@@ -190,16 +176,19 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--uri", default="ws://127.0.0.1:40001")
-    ap.add_argument("--ckpt", default="runs/exp2/model_8000.pt")
+    ap.add_argument("--ckpt", default="runs/exp16/model.pt")
     ap.add_argument("--rx", type=int, default=0)
     ap.add_argument("--window", type=float, default=6.0, help="model context window (s)")
     ap.add_argument("--tick", type=float, default=0.4, help="decode interval (s)")
     ap.add_argument("--guard", type=float, default=1.3, help="commit delay / latency (s)")
     ap.add_argument("--seconds", type=float, default=0)
-    ap.add_argument("--blank-penalty", type=float, default=3.0, dest="blank_pen")
+    ap.add_argument("--blank-penalty", type=float, default=0.0, dest="blank_pen",
+                    help="0 with conditioning (the old 3.0 compensated for missing conditioning)")
+    ap.add_argument("--squelch", type=float, default=DEFAULT_THRESH,
+                    help="keying-ratio gate; windows below this print nothing (no signal)")
     args = ap.parse_args()
     asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
-                    args.seconds, args.blank_pen))
+                    args.seconds, args.blank_pen, args.squelch))
 
 
 if __name__ == "__main__":
