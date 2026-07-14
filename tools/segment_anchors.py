@@ -25,7 +25,9 @@ from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import BLANK_ID, ids_to_text
 from deepfist.morse.alphabet import TOKENS
 
-WIN, HOP, PAD = 3.0, 0.4, 0.15
+WIN, HOP, PAD = 6.0, 0.4, 0.15   # WIN must match the model's TRAINED window (6 s); a 3 s
+                                 # search window under-reads real calls and mislabels them
+                                 # "no-locate" even when a 6 s window reads them clearly.
 WINDOW = int(6.0 * SAMPLE_RATE)          # match the synthetic training window (6 s @ SAMPLE_RATE)
 OUT = ROOT / "data" / "realset_train"
 
