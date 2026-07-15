@@ -27,6 +27,9 @@ from scipy.io import wavfile
 from scipy.signal import resample_poly
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from despike import despike as _despike
+from tempo import normalize as _tempo_norm
 from deepfist.features.spectrogram import audio_to_spectrogram, SAMPLE_RATE
 from deepfist.features.conditioner import maybe_condition
 from deepfist.model.net import CwCtcNet
@@ -77,7 +80,7 @@ def windows(a, sr, win, hop):
         t += hop
 
 
-def decode_ours(ckpt, a, sr, win, hop):
+def decode_ours(ckpt, a, sr, win, hop, despike=False, tempo=0.0):
     cfg = json.loads((Path(ckpt).parent / "config.json").read_text())
     net = CwCtcNet(time_downsample=cfg["time_downsample"], width=cfg["width"])
     net.load_state_dict(torch.load(ckpt, map_location="cpu")); net.eval()
@@ -86,6 +89,10 @@ def decode_ours(ckpt, a, sr, win, hop):
         for seg in windows(a, sr, win, hop):
             if len(seg) < sr * 1: continue
             x = resample_poly(seg, SAMPLE_RATE, sr).astype(np.float32)
+            if despike:
+                x = _despike(x, SAMPLE_RATE)
+            if tempo:
+                x, _ = _tempo_norm(x, SAMPLE_RATE, target_wpm=tempo)
             lp = net(audio_to_spectrogram(maybe_condition(x, SAMPLE_RATE), SAMPLE_RATE).unsqueeze(0).unsqueeze(0))
             parts.append(greedy_ctc_decode(lp)[0])
     return " ".join(parts)
@@ -110,6 +117,8 @@ def main():
     ap.add_argument("--deepcw", action="store_true")
     ap.add_argument("--win", type=float, default=15.0); ap.add_argument("--hop", type=float, default=15.0)
     ap.add_argument("--norm-peak", action="store_true", help="peak-normalize whole clip to 0.95 first")
+    ap.add_argument("--despike", action="store_true", help="impulse-blank each window before conditioning")
+    ap.add_argument("--tempo", type=float, default=0.0, help="normalize to this target WPM (0=off)")
     args = ap.parse_args()
 
     ref = keep_tokenizable(clean_transcript(Path(args.txt).read_text(encoding="utf-8", errors="ignore")))
@@ -117,9 +126,10 @@ def main():
     print(f"{Path(args.wav).name}  dur={len(a)/sr:.0f}s peak={np.abs(a).max():.3f} rms={np.sqrt((a**2).mean()):.4f}  ref_len={len(ref.replace(' ',''))}")
     def scr(pred):
         return cer(pred.replace(" ", ""), ref.replace(" ", ""))
+    mode = ("+despike" if args.despike else "") + (f"+tempo{args.tempo:g}" if args.tempo else "")
     for ckpt in args.ckpt:
-        p = decode_ours(ckpt, a, sr, args.win, args.hop)
-        print(f"  {Path(ckpt).parent.name:12s} CER {scr(p)*100:5.1f}%   {p[:70]!r}")
+        p = decode_ours(ckpt, a, sr, args.win, args.hop, args.despike, args.tempo)
+        print(f"  {Path(ckpt).parent.name+mode:20s} CER {scr(p)*100:5.1f}%   {p[:70]!r}")
     if args.deepcw:
         p = decode_deepcw(a, sr, args.win, args.hop)
         print(f"  {'DeepCW':12s} CER {scr(p)*100:5.1f}%   {p[:70]!r}")

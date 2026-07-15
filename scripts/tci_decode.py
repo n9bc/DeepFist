@@ -34,6 +34,7 @@ from deepfist.features.conditioner import condition
 from deepfist.model.net import CwCtcNet
 from deepfist.model.decode import ids_to_text, BLANK_ID
 from squelch import has_signal, DEFAULT_THRESH
+from despike import despike as _despike
 
 MODEL_SR = SAMPLE_RATE          # 3200 Hz — must match the trained model
 HDR = 64
@@ -63,7 +64,7 @@ def greedy_frames(log_probs, blank_pen):
     return ids, frames, len(args)
 
 
-async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch):
+async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch, despike):
     import json
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg_path = Path(ckpt).parent / "config.json"
@@ -149,7 +150,8 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
                     continue
                 idle_gap = False
                 with torch.no_grad():
-                    cond = condition(audio, MODEL_SR)   # AGC + tone-lock + bandpass — model expects this
+                    clean = _despike(audio, MODEL_SR) if despike else audio  # impulse-blank crashes
+                    cond = condition(clean, MODEL_SR)   # AGC + tone-lock + bandpass — model expects this
                     spec = audio_to_spectrogram(cond, MODEL_SR).unsqueeze(0).unsqueeze(0).to(device)
                     ids, frames, T = greedy_frames(net(spec), blank_pen)
                 # Commit the newly-settled time band (committed_t, audio_end-guard]
@@ -186,9 +188,11 @@ def main():
                     help="0 with conditioning (the old 3.0 compensated for missing conditioning)")
     ap.add_argument("--squelch", type=float, default=DEFAULT_THRESH,
                     help="keying-ratio gate; windows below this print nothing (no signal)")
+    ap.add_argument("--no-despike", action="store_false", dest="despike",
+                    help="disable impulse-noise blanking (on by default; neutral on clean audio)")
     args = ap.parse_args()
     asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
-                    args.seconds, args.blank_pen, args.squelch))
+                    args.seconds, args.blank_pen, args.squelch, args.despike))
 
 
 if __name__ == "__main__":
