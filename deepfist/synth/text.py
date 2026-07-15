@@ -159,8 +159,47 @@ def _ragchew(rng):
                        f"NIL = PSE RPT = KN", f"{me} = QRZ? = K"])
 
 
+# --- BT prosign discrimination drill (exp27) ------------------------------------
+# exp16 misreads BT (=, -...-) as X (-..-) / 6 (-....) / B (-...) at ALL speeds,
+# on perfect synthetic AND perfect real hand-sent BT (operator N9BC, verified) —
+# a genuine discrimination weakness on the 3rd dit + final dah, NOT a coverage gap
+# (BT is already in 37% of messages). These drills put BT directly next to its
+# dit-heavy look-alikes so the CTC loss is FORCED to resolve them (incidental BT
+# buried in words carries too little relative loss to teach the distinction), and
+# also cover the double "==" the operator sent (0% in the base distribution).
+_BT_LOOKALIKE = ["X", "6", "B", "5", "H", "S", "4", "D", "N", "T", "G", "W"]
+
+
+def _prosign_drill(rng: np.random.Generator) -> str:
+    if rng.random() < 0.5:
+        # Direct discrimination: BT interleaved with its look-alikes.
+        k = int(rng.integers(5, 10))
+        toks = ["=" if rng.random() < 0.45 else str(rng.choice(_BT_LOOKALIKE))
+                for _ in range(k)]
+        if "=" not in toks:
+            toks[int(rng.integers(0, k))] = "="
+        return " ".join(toks)
+    # Realistic BT-heavy usage, incl. the double "==" separator.
+    call, me = _callsign(rng), _callsign(rng)
+    return str(rng.choice([
+        "R = R = TU = 73 =",
+        f"{call} = = {me}",
+        "= = 5NN = =",
+        f"BK = {call} = HW? =",
+        "TU = 73 = = GB",
+        f"{me} = X 6 = B = 6 X =",
+    ]))
+
+
 def random_message(rng: np.random.Generator, max_tokens: int = 40) -> str:
     """One realistic on-air utterance: ~half contest, ~half conversational rag-chew."""
+    if rng.random() < 0.10:                 # exp27: BT discrimination drill
+        msg = _prosign_drill(rng)
+        toks = text_to_tokens(msg)
+        while len(toks) > max_tokens and " " in msg:
+            msg = msg.rsplit(" ", 1)[0]
+            toks = text_to_tokens(msg)
+        return msg or "TEST"
     if rng.random() < 0.5:
         msg = _ragchew(rng)
         toks = text_to_tokens(msg)
