@@ -5,9 +5,10 @@ description = "Clean-room neural CW (Morse) decoder — synthetic data foundatio
 requires-python = ">=3.11"
 # torch: install the CUDA build with:
 #   uv pip install torch --index-url https://download.pytorch.org/whl/cu124
-dependencies = ["numpy>=1.26", "torch>=2.6"]
+dependencies = ["numpy>=1.26", "scipy>=1.11", "torch>=2.6", "websockets>=12.0"]
 
 [project.optional-dependencies]
+audio = ["sounddevice>=0.4"]   # soundcard live decode (scripts/live_decode.py)
 dev = ["pytest>=8.0", "onnx>=1.22", "onnxruntime>=1.27"]
 
 [build-system]
