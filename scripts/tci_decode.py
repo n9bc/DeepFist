@@ -205,7 +205,7 @@ async def _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--uri", default="ws://127.0.0.1:40001")
-    ap.add_argument("--ckpt", default="runs/exp28_farnsworth/model.pt")
+    ap.add_argument("--ckpt", default="runs/exp27_bt/model.pt")
     ap.add_argument("--rx", type=int, default=0)
     ap.add_argument("--window", type=float, default=6.0, help="model context window (s)")
     ap.add_argument("--tick", type=float, default=0.4, help="decode interval (s)")
