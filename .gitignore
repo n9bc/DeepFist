@@ -33,3 +33,9 @@ Thumbs.db
 .vscode/
 .idea/
 runs/MASTER.SCP
+
+# Internal working docs — kept locally, not published
+/CLAUDE.md
+/HANDOFF.md
+/MORNING_NOTE.md
+/docs/superpowers/
