@@ -36,6 +36,17 @@ class GenConfig:
     # Inter-element/character/word gap scaling range. Real spacing stretches and
     # compresses (~0.65-1.15x). (1.0, 1.0) = exact PARIS spacing.
     gap_scale_range: tuple[float, float] = (1.0, 1.0)
+    # Farnsworth-geometry augmentation (exp28): with this probability, keep the
+    # elements at `wpm` but stretch inter-char/word gaps to an effective speed of
+    # wpm * U(farnsworth_range). This DISTORTS the 1:3:7 gap ratios — the geometry
+    # of ARRL slow-speed practice and hand-sent hesitation, which uniform
+    # gap_scale (ratio-preserving) cannot produce. 0.0 = off (unchanged).
+    farnsworth_prob: float = 0.0
+    farnsworth_range: tuple[float, float] = (0.4, 0.9)
+    # Per-gap hesitation (exp29): per clip, each inter-char/word gap is stretched
+    # by U(1, 1+h) with h ~ U(0, hesitation_max) — random per-gap ratio distortion
+    # (hand-sent mid-word pauses), unlike Farnsworth's uniform stretch. 0.0 = off.
+    hesitation_max: float = 0.0
     # MP3 codec-artifact augmentation: probability of an encode/decode round-trip
     # and the bitrate (kbps) choices. 0.0 = off (no codec artifacts, as before).
     mp3_prob: float = 0.0
@@ -129,7 +140,10 @@ def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample
     wpm = float(rng.uniform(*cfg.wpm_range))
     pitch = float(rng.uniform(*cfg.pitch_range))
     snr = float(rng.uniform(*cfg.snr_range))
-    timing = wpm_to_timing(wpm)
+    fw = None
+    if cfg.farnsworth_prob and rng.random() < cfg.farnsworth_prob:
+        fw = wpm * float(rng.uniform(*cfg.farnsworth_range))
+    timing = wpm_to_timing(wpm, farnsworth_wpm=fw)
     # Optional morphology knobs (dah/dit ratio + gap scaling); no-ops at defaults.
     ratio = (3.0 + float(rng.uniform(-cfg.dahdit_jitter, cfg.dahdit_jitter))
              if cfg.dahdit_jitter else None)
@@ -140,6 +154,8 @@ def generate(seed: int | None = None, config: GenConfig | None = None) -> Sample
     segs = apply_fist(segs, rng, FistParams(
         jitter_sigma=float(rng.uniform(0.03, 0.15)),
         weight=float(rng.uniform(-0.15, 0.15)),
+        hesitation=(float(rng.uniform(0.0, cfg.hesitation_max))
+                    if cfg.hesitation_max else 0.0),
     ))
     env = segments_to_envelope(segs, sr, rise=float(rng.uniform(*cfg.rise_range)))
     drift = float(rng.uniform(0, 3)) if cfg.impair else 0.0

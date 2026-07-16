@@ -33,12 +33,19 @@ def main():
     ap.add_argument("--gap-min", type=float, default=1.0, dest="gap_min")
     ap.add_argument("--gap-max", type=float, default=1.0, dest="gap_max")
     ap.add_argument("--mp3-prob", type=float, default=0.0, dest="mp3_prob")
+    ap.add_argument("--farnsworth-prob", type=float, default=0.0, dest="farnsworth_prob",
+                    help="p(clip uses Farnsworth-geometry gaps: elements at wpm, "
+                         "char/word gaps stretched to wpm*U(0.4,0.9))")
+    ap.add_argument("--hesitation-max", type=float, default=0.0, dest="hesitation_max",
+                    help="per-gap hesitation: each char/word gap stretched U(1,1+h), "
+                         "h~U(0,this) per clip (hand-sent mid-word pauses)")
     args = ap.parse_args()
 
     chan = ChannelConfig(flutter=True if args.flutter else ChannelConfig().flutter)
     gen = GenConfig(snr_range=(args.snr_min, args.snr_max), qrm_prob=args.qrm_prob, channel=chan,
                     rise_range=(args.rise_min, args.rise_max), dahdit_jitter=args.dahdit_jitter,
-                    gap_scale_range=(args.gap_min, args.gap_max), mp3_prob=args.mp3_prob)
+                    gap_scale_range=(args.gap_min, args.gap_max), mp3_prob=args.mp3_prob,
+                    farnsworth_prob=args.farnsworth_prob, hesitation_max=args.hesitation_max)
     cfg = TrainConfig(steps=args.steps, batch_size=args.batch, num_workers=args.workers,
                       time_downsample=args.downsample, width=args.width, out_dir=args.out, lr=args.lr,
                       wmr_dir=args.wmr, wmr_prob=args.wmr_prob, gen_config=gen,
