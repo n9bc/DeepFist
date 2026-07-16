@@ -64,7 +64,8 @@ def greedy_frames(log_probs, blank_pen):
     return ids, frames, len(args)
 
 
-async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch, despike):
+async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch, despike,
+              strip_punct=True):
     import json
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg_path = Path(ckpt).parent / "config.json"
@@ -163,7 +164,13 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
                         if committed_t < win_start + (fr / max(1, T)) * window <= settle_to]
                 committed_t = max(committed_t, settle_to)
                 if emit:
-                    sys.stdout.write(ids_to_text(emit)); sys.stdout.flush()
+                    text = ids_to_text(emit)
+                    if strip_punct:
+                        # exp16's , and . are ~always spurious gap-noise on real audio
+                        # (ARRL CER 9.7->6.7 / 11.7->9.4 / 5.9->3.7 just by dropping them)
+                        text = text.replace(",", "").replace(".", "")
+                    if text:
+                        sys.stdout.write(text); sys.stdout.flush()
                 if seconds and time.time() - start >= seconds:
                     break
         finally:
@@ -190,9 +197,11 @@ def main():
                     help="keying-ratio gate; windows below this print nothing (no signal)")
     ap.add_argument("--no-despike", action="store_false", dest="despike",
                     help="disable impulse-noise blanking (on by default; neutral on clean audio)")
+    ap.add_argument("--keep-punct", action="store_false", dest="strip_punct",
+                    help="keep , and . in output (suppressed by default: ~always spurious)")
     args = ap.parse_args()
     asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
-                    args.seconds, args.blank_pen, args.squelch, args.despike))
+                    args.seconds, args.blank_pen, args.squelch, args.despike, args.strip_punct))
 
 
 if __name__ == "__main__":
