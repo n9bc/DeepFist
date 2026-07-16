@@ -1,5 +1,5 @@
 ---
-name: rbn-contest-harvest
+name: contest-harvest
 description: Use when harvesting real off-air CW during a live contest (CWOps CWT, etc.) through the operator's Lyra receiver + the Reverse Beacon Network, to build RBN-labeled DeepFist training data. Covers pre-flight safety, the hands-off capture loop, dataset build, and the gated retrain.
 ---
 
