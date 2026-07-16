@@ -65,7 +65,9 @@ def greedy_frames(log_probs, blank_pen):
 
 
 async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch, despike,
-              strip_punct=True):
+              strip_punct=True, reconnect=True):
+    """Load the model once, then stream — auto-reconnecting when Lyra drops
+    (it crashes ~every 15 min; the decoder should survive, not die with it)."""
     import json
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg_path = Path(ckpt).parent / "config.json"
@@ -75,6 +77,23 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
     net.load_state_dict(torch.load(ckpt, map_location=device))
     net.eval()
 
+    deadline = (time.time() + seconds) if seconds else None
+    while True:
+        try:
+            await _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard,
+                                  deadline, blank_pen, squelch, despike, strip_punct)
+            return                                          # deadline reached / normal end
+        except (websockets.exceptions.WebSocketException, OSError, ConnectionError) as e:
+            if not reconnect:
+                raise
+            if deadline and time.time() >= deadline:
+                return
+            print(f"\n[TCI lost ({type(e).__name__}) — reconnecting in 3s]", flush=True)
+            await asyncio.sleep(3.0)
+
+
+async def _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard,
+                          deadline, blank_pen, squelch, despike, strip_punct):
     state = {"sr": None, "factor": 1, "freq": None, "total": 0}
     ring = None
 
@@ -131,10 +150,11 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
 
         committed_t = 0.0     # absolute audio time already printed
         idle_gap = False
-        start = time.time()
         try:
             while True:
                 await asyncio.sleep(tick)
+                if deadline and time.time() >= deadline:
+                    break
                 if ring is None or state["total"] == 0:
                     continue
                 audio_end = state["total"] / state["sr"]
@@ -146,7 +166,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
                     if not idle_gap:
                         sys.stdout.write(" "); sys.stdout.flush(); idle_gap = True
                     committed_t = max(committed_t, audio_end - guard)
-                    if seconds and time.time() - start >= seconds:
+                    if deadline and time.time() >= deadline:
                         break
                     continue
                 idle_gap = False
@@ -171,7 +191,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
                         text = text.replace(",", "").replace(".", "")
                     if text:
                         sys.stdout.write(text); sys.stdout.flush()
-                if seconds and time.time() - start >= seconds:
+                if deadline and time.time() >= deadline:
                     break
         finally:
             print(flush=True)
@@ -185,7 +205,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--uri", default="ws://127.0.0.1:40001")
-    ap.add_argument("--ckpt", default="runs/exp16/model.pt")
+    ap.add_argument("--ckpt", default="runs/exp28_farnsworth/model.pt")
     ap.add_argument("--rx", type=int, default=0)
     ap.add_argument("--window", type=float, default=6.0, help="model context window (s)")
     ap.add_argument("--tick", type=float, default=0.4, help="decode interval (s)")
@@ -199,9 +219,12 @@ def main():
                     help="disable impulse-noise blanking (on by default; neutral on clean audio)")
     ap.add_argument("--keep-punct", action="store_false", dest="strip_punct",
                     help="keep , and . in output (suppressed by default: ~always spurious)")
+    ap.add_argument("--no-reconnect", action="store_false", dest="reconnect",
+                    help="die when TCI drops instead of auto-reconnecting (Lyra is flaky)")
     args = ap.parse_args()
     asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
-                    args.seconds, args.blank_pen, args.squelch, args.despike, args.strip_punct))
+                    args.seconds, args.blank_pen, args.squelch, args.despike, args.strip_punct,
+                    args.reconnect))
 
 
 if __name__ == "__main__":
