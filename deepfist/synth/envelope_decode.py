@@ -35,7 +35,21 @@ def decode_clean_envelope(audio, sample_rate, pitch_hz, wpm) -> str:
     env = _envelope(audio, sample_rate, pitch_hz)
     thr = 0.25 * env.max()
     on = env > thr
-    unit = (1.2 / wpm) * sample_rate  # samples per dot
+    unit = (1.2 / wpm) * sample_rate  # samples per dot (nominal)
+    runs = list(_runs(on))
+
+    # Adaptive dit/dah boundary (fldigi-style): fist jitter + envelope smoothing
+    # shift ON durations off nominal, so a fixed 2*unit split misreads shortened
+    # dahs as dits at high wpm. When both clusters are present, split at the
+    # midpoint of the measured dit/dah means instead.
+    on_split = 2 * unit
+    on_lens = np.asarray([ln for v, ln in runs if v], dtype=float)
+    if len(on_lens) >= 2 and on_lens.max() / max(on_lens.min(), 1.0) > 1.8:
+        mid = (on_lens.min() + on_lens.max()) / 2
+        dits, dahs = on_lens[on_lens <= mid], on_lens[on_lens > mid]
+        if len(dits) and len(dahs):
+            on_split = (dits.mean() + dahs.mean()) / 2
+
     text, pattern = [], ""
 
     def flush():
@@ -44,11 +58,11 @@ def decode_clean_envelope(audio, sample_rate, pitch_hz, wpm) -> str:
             text.append(_PATTERN_TO_CHAR.get(pattern, "?"))
             pattern = ""
 
-    for value, length in _runs(on):
-        u = length / unit
+    for value, length in runs:
         if value:
-            pattern += "." if u < 2 else "-"
+            pattern += "." if length < on_split else "-"
         else:
+            u = length / unit
             if u >= 5:      # word gap
                 flush(); text.append(" ")
             elif u >= 2:    # char gap
