@@ -65,7 +65,7 @@ def greedy_frames(log_probs, blank_pen):
 
 
 async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squelch, despike,
-              strip_punct=True, reconnect=True):
+              strip_punct=True, reconnect=True, bt_mode="newline"):
     """Load the model once, then stream — auto-reconnecting when Lyra drops
     (it crashes ~every 15 min; the decoder should survive, not die with it)."""
     import json
@@ -81,7 +81,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
     while True:
         try:
             await _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard,
-                                  deadline, blank_pen, squelch, despike, strip_punct)
+                                  deadline, blank_pen, squelch, despike, strip_punct, bt_mode)
             return                                          # deadline reached / normal end
         except (websockets.exceptions.WebSocketException, OSError, ConnectionError) as e:
             if not reconnect:
@@ -93,7 +93,7 @@ async def run(uri, ckpt, rx_target, window, tick, guard, seconds, blank_pen, squ
 
 
 async def _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard,
-                          deadline, blank_pen, squelch, despike, strip_punct):
+                          deadline, blank_pen, squelch, despike, strip_punct, bt_mode):
     state = {"sr": None, "factor": 1, "freq": None, "total": 0}
     ring = None
 
@@ -185,6 +185,11 @@ async def _stream_session(uri, net, device, ckpt, rx_target, window, tick, guard
                 committed_t = max(committed_t, settle_to)
                 if emit:
                     text = ids_to_text(emit)
+                    # BT (=) is a thought separator in QSOs — render per --bt.
+                    if bt_mode == "newline":
+                        text = text.replace("=", "\n")
+                    elif bt_mode == "prosign":
+                        text = text.replace("=", "<BT>")
                     if strip_punct:
                         # exp16's , and . are ~always spurious gap-noise on real audio
                         # (ARRL CER 9.7->6.7 / 11.7->9.4 / 5.9->3.7 just by dropping them)
@@ -221,10 +226,13 @@ def main():
                     help="keep , and . in output (suppressed by default: ~always spurious)")
     ap.add_argument("--no-reconnect", action="store_false", dest="reconnect",
                     help="die when TCI drops instead of auto-reconnecting (Lyra is flaky)")
+    ap.add_argument("--bt", choices=["newline", "eq", "prosign"], default="newline",
+                    dest="bt_mode", help="render BT (=) as a line break (default), "
+                    "a literal '=', or '<BT>'")
     args = ap.parse_args()
     asyncio.run(run(args.uri, args.ckpt, args.rx, args.window, args.tick, args.guard,
                     args.seconds, args.blank_pen, args.squelch, args.despike, args.strip_punct,
-                    args.reconnect))
+                    args.reconnect, args.bt_mode))
 
 
 if __name__ == "__main__":
