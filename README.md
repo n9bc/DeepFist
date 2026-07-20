@@ -166,5 +166,7 @@ as a *conceptual reference*, never copying its code or trained weights.
 
 ## License
 
-**MIT** — see [`LICENSE`](LICENSE). Permissive by design, so it can be embedded in
-other applications (e.g. [SDRLoggerPlus](https://github.com/N8SDR1/SDRLoggerPlus)).
+**GPL-3.0-or-later** — see [`LICENSE`](LICENSE). Matches
+[Lyra-SDR](https://github.com/N8SDR1/Lyra-SDR-cpp), DeepFist's primary host
+application, and the wider ham-software tradition (fldigi, WSJT-X). Relicensed
+from MIT on 2026-07-18 while the sole-author history made that a clean switch.

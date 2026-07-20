@@ -2,6 +2,7 @@
 name = "deepfist"
 version = "0.0.1"
 description = "Clean-room neural CW (Morse) decoder — synthetic data foundation"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 # torch: install the CUDA build with:
 #   uv pip install torch --index-url https://download.pytorch.org/whl/cu124
