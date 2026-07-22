@@ -16,10 +16,10 @@ empty frequency instead of hallucinating text.
 ## Status
 
 **Working.** The model trains, evaluates, exports to ONNX, and runs live off a
-radio over TCI. On real ARRL code-practice audio the champion model copies plain
-text at roughly **6–12% character error rate across 10–30 WPM** (measured full
-session, space-normalized). Clean copy of arbitrary *hand-sent* fists is the open
-frontier — see [`HANDOFF.md`](HANDOFF.md).
+radio over TCI. On real ARRL code-practice audio (198 clips, 10–40 WPM) the
+champion model copies plain text at **~7% character error rate overall**,
+space-normalized, with per-speed variance from ~3% to ~17%. Clean copy of
+arbitrary *hand-sent* fists is the open frontier — see [`HANDOFF.md`](HANDOFF.md).
 
 > Trained weights are **not** committed (the `runs/` directory and `*.pt` files
 > are git-ignored to keep the repo light). You train your own model, or obtain a
@@ -163,6 +163,21 @@ DeepFist is **inspired by** e04's excellent
 can beat traditional decoders in noise. DeepCW is licensed **AGPL-3.0-only**,
 which is why DeepFist is a fresh, independent implementation: DeepCW is used only
 as a *conceptual reference*, never copying its code or trained weights.
+
+## Naming
+
+<details>
+<summary>Why "DeepFist"? (a confession)</summary>
+
+In ham radio, your "fist" is your personal Morse rhythm — the way you, and only
+you, send. This project uses deep learning to read fists off the air. Deep
+Learning on your fist. DeepFist. Seemed obvious at the time.
+
+I didn't clock how it sounded out loud until I announced the project at the
+dinner table. My wife just stared at me. My son lost it laughing. I'm too
+stubborn to rename the repo now.
+
+</details>
 
 ## License
 
