@@ -54,6 +54,10 @@ champion model copies plain text at **~7% character error rate overall**,
 space-normalized, with per-speed variance from ~3% to ~17%. Clean copy of
 arbitrary *hand-sent* fists is the open frontier; see [`HANDOFF.md`](HANDOFF.md).
 
+DeepFist's exported ONNX model is built into
+[Lyra-SDR](https://github.com/N8SDR1/Lyra-SDR-cpp) as its live CW decoder, in
+addition to running standalone via `scripts/tci_decode.py` here.
+
 > Trained weights are **not** committed (the `runs/` directory and `*.pt` files
 > are git-ignored to keep the repo light). You train your own model, or obtain a
 > checkpoint separately, then point the tools at it. See [Training](#training).
