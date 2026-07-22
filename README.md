@@ -193,13 +193,20 @@ tools/           squelch, despike, tempo, cw_lm, eval + analysis utilities
 tests/           pytest suite
 ```
 
-## Relationship to DeepCW
+## Lyra-SDR
 
-DeepFist is **inspired by** e04's excellent
+DeepFist's exported ONNX model is built directly into
+[Lyra-SDR](https://github.com/N8SDR1/Lyra-SDR-cpp), a C++ software-defined radio
+application, as its live CW decoder — DeepFist doesn't just talk to Lyra over
+TCI, it ships inside it. Lyra is DeepFist's primary host application. Standalone
+TCI decode (`scripts/tci_decode.py`) works with any TCI-speaking SDR
+(ExpertSDR3, Thetis), but Lyra is the reference integration.
+
+*(Inspired by, not derived from: DeepFist is inspired by e04's
 [DeepCW](https://github.com/e04/deepcw-engine), which proved a neural CW decoder
-can beat traditional decoders in noise. DeepCW is licensed **AGPL-3.0-only**,
-which is why DeepFist is a fresh, independent implementation: DeepCW is used only
-as a *conceptual reference*, never copying its code or trained weights.
+can beat traditional decoders in noise. DeepCW is AGPL-3.0-only, so DeepFist is a
+fresh, independent implementation using it only as a conceptual reference, never
+copying its code or trained weights.)*
 
 ## License
 
