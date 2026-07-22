@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepFist &mdash; neural CW decoder</title>
+<meta name="description" content="A clean-room, self-trained neural network CW (Morse code) decoder and live copy display.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>&%2358280;</text></svg>">
+<style>
+  :root{
+    --bg:#0a0a0c;
+    --bg2:#0e1016;
+    --panel:#12141c;
+    --panel-line:#22273a;
+    --gold:#d8a857;
+    --gold-dim:#8b6a34;
+    --blue:#3fa8ff;
+    --blue-dim:#1c5a99;
+    --text:#e8e6df;
+    --text-dim:#9a9a9e;
+    --mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1200px 600px at 15% -10%, #2a1c0a55, transparent 60%),
+      radial-gradient(1200px 700px at 100% 20%, #0a2a4a66, transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.6;
+    overflow-x:hidden;
+  }
+  a{color:var(--blue)}
+  a:hover{color:var(--gold)}
+
+  .hero-banner{
+    width:100%;
+    display:block;
+    max-height:46vh;
+    object-fit:cover;
+    object-position:center 40%;
+    border-bottom:1px solid var(--panel-line);
+  }
+
+  main{max-width:900px;margin:0 auto;padding:0 24px 80px}
+
+  .tagline{
+    text-align:center;
+    padding:36px 12px 8px;
+  }
+  .tagline p{
+    font-size:1.15rem;
+    color:var(--text);
+    max-width:640px;
+    margin:0 auto;
+  }
+  .tagline .sub{
+    color:var(--text-dim);
+    font-size:0.95rem;
+    margin-top:10px;
+  }
+
+  .cta-row{
+    display:flex;
+    gap:12px;
+    justify-content:center;
+    flex-wrap:wrap;
+    margin:26px 0 8px;
+  }
+  .btn{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 20px;
+    border-radius:8px;
+    text-decoration:none;
+    font-weight:600;
+    font-size:0.95rem;
+    border:1px solid transparent;
+    transition:transform .15s ease, border-color .15s ease;
+  }
+  .btn:hover{transform:translateY(-1px)}
+  .btn-primary{
+    background:linear-gradient(135deg, var(--gold) 0%, #b98a3f 100%);
+    color:#191305;
+  }
+  .btn-primary:hover{color:#191305}
+  .btn-ghost{
+    border-color:var(--panel-line);
+    color:var(--text);
+    background:var(--panel);
+  }
+  .btn-ghost:hover{border-color:var(--blue-dim); color:var(--text)}
+
+  .rule{
+    margin:56px 0 40px;
+    padding:18px 22px;
+    border-left:3px solid var(--gold);
+    background:linear-gradient(90deg, #d8a85712, transparent 70%);
+    border-radius:0 8px 8px 0;
+    font-size:1.02rem;
+  }
+  .rule strong{color:var(--gold)}
+
+  h2{
+    font-size:1.5rem;
+    margin:64px 0 20px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--panel-line);
+    background:linear-gradient(90deg, var(--gold), var(--blue));
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    display:inline-block;
+  }
+
+  .pipeline{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:6px 4px;
+    font-family:var(--mono);
+    font-size:0.85rem;
+    margin:18px 0 28px;
+  }
+  .pipeline .stage{
+    padding:8px 12px;
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:6px;
+    white-space:nowrap;
+  }
+  .pipeline .arrow{color:var(--gold-dim); font-size:1rem}
+  .pipeline .stage.core{
+    border-color:var(--blue-dim);
+    color:var(--blue);
+    box-shadow:0 0 14px #3fa8ff22;
+  }
+
+  .stat-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(160px,1fr));
+    gap:16px;
+    margin:20px 0 8px;
+  }
+  .stat{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:10px;
+    padding:18px 16px;
+    text-align:center;
+  }
+  .stat .num{
+    font-family:var(--mono);
+    font-size:1.7rem;
+    font-weight:700;
+    background:linear-gradient(135deg, var(--gold), var(--blue));
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+  .stat .label{color:var(--text-dim); font-size:0.82rem; margin-top:6px}
+
+  pre{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:8px;
+    padding:16px 18px;
+    overflow-x:auto;
+    font-family:var(--mono);
+    font-size:0.85rem;
+    line-height:1.55;
+  }
+  code{
+    font-family:var(--mono);
+    background:#ffffff10;
+    padding:1px 6px;
+    border-radius:4px;
+    font-size:0.88em;
+  }
+  pre code{background:none; padding:0}
+
+  ul.feature-list{list-style:none; margin:0; padding:0}
+  ul.feature-list li{
+    padding:10px 0 10px 22px;
+    border-bottom:1px solid var(--panel-line);
+    position:relative;
+  }
+  ul.feature-list li:last-child{border-bottom:none}
+  ul.feature-list li::before{
+    content:"";
+    position:absolute; left:0; top:18px;
+    width:8px; height:8px; border-radius:50%;
+    background:var(--gold);
+    box-shadow:0 0 8px #d8a85788;
+  }
+  ul.feature-list strong{color:var(--blue)}
+
+  details{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:8px;
+    padding:14px 18px;
+    margin:14px 0;
+  }
+  details summary{
+    cursor:pointer;
+    font-weight:600;
+    color:var(--gold);
+  }
+  details[open] summary{margin-bottom:10px}
+
+  .layout-tree{
+    font-family:var(--mono);
+    font-size:0.82rem;
+    color:var(--text-dim);
+  }
+  .layout-tree b{color:var(--text)}
+
+  footer{
+    margin-top:80px;
+    padding-top:24px;
+    border-top:1px solid var(--panel-line);
+    color:var(--text-dim);
+    font-size:0.85rem;
+    text-align:center;
+  }
+  footer a{color:var(--text-dim); text-decoration:underline}
+  footer a:hover{color:var(--gold)}
+
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f7f5f0;
+      --bg2:#ffffff;
+      --panel:#ffffff;
+      --panel-line:#e0ddd2;
+      --text:#1b1a17;
+      --text-dim:#6b6a63;
+    }
+    body{
+      background:
+        radial-gradient(1200px 600px at 15% -10%, #d8a85722, transparent 60%),
+        radial-gradient(1200px 700px at 100% 20%, #3fa8ff1a, transparent 55%),
+        var(--bg);
+    }
+    code{background:#00000010}
+    .btn-primary{color:#1b1305}
+  }
+</style>
+</head>
+<body>
+
+<img class="hero-banner" src="deepfist-banner-fusion-morse-key.png"
+     alt="DeepFist: a vintage radio and brass Morse key on the left, dissolving into a blue neural network on the right">
+
+<main>
+
+  <div class="tagline">
+    <p>A clean-room, self-trained neural network <strong>CW (Morse code) decoder</strong>,
+       and a live, on-screen <strong>copy display</strong> that reads real off-air CW like a CW reader.</p>
+    <p class="sub">audio &rarr; conditioning &rarr; spectrogram &rarr; CNN + CTC &rarr; text</p>
+  </div>
+
+  <div class="cta-row">
+    <a class="btn btn-primary" href="https://github.com/n9bc/DeepFist">View on GitHub</a>
+    <a class="btn btn-ghost" href="https://github.com/n9bc/DeepFist#quick-start">Quick start</a>
+    <a class="btn btn-ghost" href="https://github.com/n9bc/DeepFist/blob/main/HANDOFF.md">Project log</a>
+  </div>
+
+  <div class="rule">
+    <strong>Hard rule:</strong> no signal energy &rarr; no characters. The decoder stays
+    silent on an empty frequency instead of hallucinating text.
+  </div>
+
+  <h2>How it works</h2>
+  <p>DeepFist decodes Morse the way modern speech recognition works: instead of
+     hand-written timing rules, it's trained on synthetically generated CW degraded
+     with noise, fading (QSB), and interference, then adapted on real off-air
+     recordings &mdash; so it stays readable on weak, messy, real-world signals where
+     threshold decoders fall apart.</p>
+
+  <div class="pipeline">
+    <span class="stage">radio audio</span><span class="arrow">&rarr;</span>
+    <span class="stage">squelch (keying gate)</span><span class="arrow">&rarr;</span>
+    <span class="stage">de-spike</span><span class="arrow">&rarr;</span>
+    <span class="stage">conditioner</span><span class="arrow">&rarr;</span>
+    <span class="stage">spectrogram</span><span class="arrow">&rarr;</span>
+    <span class="stage core">CNN + CTC</span><span class="arrow">&rarr;</span>
+    <span class="stage">streamed text</span>
+  </div>
+
+  <details>
+    <summary>What are CNN and CTC?</summary>
+    <p><strong>CNN (Convolutional Neural Network)</strong>: the type of neural net that
+       scans the audio's spectrogram in small local patches, like a sliding window, to
+       recognize patterns (dits, dahs, gaps) regardless of exactly where in time or
+       frequency they land. Same core architecture used for image recognition, applied
+       here to a time-frequency image instead of a photo.</p>
+    <p><strong>CTC (Connectionist Temporal Classification)</strong>: the training and
+       decoding method that lets the network output text without needing every audio
+       frame pre-aligned to a specific letter. The model emits a symbol (or a "blank"
+       for silence/no-decision) at every time-step, and repeats get collapsed, so
+       <code>HH_EE_LL_LL_OO</code> (with <code>_</code> as blank) collapses to
+       <code>HELLO</code>. It's the standard technique behind most speech-to-text
+       systems, applied here to Morse.</p>
+  </details>
+
+  <h2>Status</h2>
+  <p><strong>Working.</strong> The model trains, evaluates, exports to ONNX, and runs
+     live off a radio over TCI. Clean copy of arbitrary <em>hand-sent</em> fists is the
+     open frontier.</p>
+
+  <div class="stat-grid">
+    <div class="stat"><div class="num">~7%</div><div class="label">char error rate, overall</div></div>
+    <div class="stat"><div class="num">10&ndash;40</div><div class="label">WPM range tested</div></div>
+    <div class="stat"><div class="num">198</div><div class="label">real ARRL clips evaluated</div></div>
+    <div class="stat"><div class="num">3&ndash;17%</div><div class="label">per-speed CER spread</div></div>
+  </div>
+
+  <h2>Live decode, the flagship</h2>
+  <p>Streams RX audio from an SDR that speaks TCI (Lyra / ExpertSDR3, Thetis), and
+     streams decoded text to the terminal as it settles.</p>
+  <pre><code>python scripts/tci_decode.py --ckpt path/to/model.pt</code></pre>
+
+  <ul class="feature-list">
+    <li><strong>Squelch</strong> &mdash; an in-band keying detector. Dead air and the
+        receiver's AGC tone score low; only genuinely keyed CW opens the gate, so no
+        characters are printed on an empty frequency.</li>
+    <li><strong>De-spike</strong> &mdash; an impulse-noise blanker that removes static
+        crashes before decoding.</li>
+    <li><strong>Conditioning</strong> &mdash; AGC &rarr; tone-lock &rarr; narrow
+        band-pass &rarr; re-center to 600 Hz, the front-end the model was trained with.</li>
+  </ul>
+
+  <h2>Install</h2>
+  <p>Requires Python 3.11+.</p>
+  <pre><code>git clone https://github.com/n9bc/DeepFist && cd DeepFist
+python -m venv .venv
+.venv\Scripts\activate      # Windows
+pip install -e .</code></pre>
+
+  <h2>Project layout</h2>
+  <pre class="layout-tree"><code><b>deepfist/</b>        core library
+  synth/           synthetic CW generator + channel model
+  features/        spectrogram + conditioner (front-end)
+  model/           CwCtcNet + CTC decode
+  morse/           alphabet / token tables
+  train/           training loop + metrics
+  export/          ONNX export
+<b>scripts/</b>         entry points: train, generate, evaluate, export,
+                 tci_decode (live TCI), tci_capture, live_decode (soundcard)
+<b>tools/</b>           squelch, despike, tempo, cw_lm, eval + analysis utilities
+<b>tests/</b>           pytest suite</code></pre>
+
+  <details>
+    <summary>Why "DeepFist"? (a confession)</summary>
+    <p>In ham radio, your "fist" is your personal Morse rhythm: the way you, and only
+       you, send. This project uses deep learning to read fists off the air. Deep
+       Learning on your fist. DeepFist. Seemed obvious at the time.</p>
+    <p>I didn't clock how it sounded out loud until I announced the project at the
+       dinner table. My wife just stared at me. My son lost it laughing. I'm too
+       stubborn to rename the repo now.</p>
+  </details>
+
+  <h2>Relationship to DeepCW</h2>
+  <p>DeepFist is inspired by e04's excellent
+     <a href="https://github.com/e04/deepcw-engine">DeepCW</a>, which proved a neural CW
+     decoder can beat traditional decoders in noise. DeepCW is licensed AGPL-3.0-only,
+     which is why DeepFist is a fresh, independent implementation: DeepCW is used only
+     as a conceptual reference, never copying its code or trained weights.</p>
+
+  <footer>
+    <p>GPL-3.0-or-later &middot;
+       <a href="https://github.com/n9bc/DeepFist">github.com/n9bc/DeepFist</a> &middot;
+       matches <a href="https://github.com/N8SDR1/Lyra-SDR-cpp">Lyra-SDR</a>,
+       DeepFist's primary host application</p>
+  </footer>
+
+</main>
+</body>
+</html>
