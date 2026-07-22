@@ -26,6 +26,24 @@ stubborn to rename the repo now.
 
 </details>
 
+<details>
+<summary>What are CNN and CTC?</summary>
+
+**CNN (Convolutional Neural Network)**: the type of neural net that scans the
+audio's spectrogram in small local patches, like a sliding window, to
+recognize patterns (dits, dahs, gaps) regardless of exactly where in time or
+frequency they land. Same core architecture used for image recognition,
+applied here to a time-frequency image instead of a photo.
+
+**CTC (Connectionist Temporal Classification)**: the training and decoding
+method that lets the network output text without needing every audio frame
+pre-aligned to a specific letter. The model emits a symbol (or a "blank" for
+silence/no-decision) at every time-step, and repeats get collapsed, so
+`HH_EE_LL_LL_OO` (with `_` as blank) collapses to `HELLO`. It's the standard
+technique behind most speech-to-text systems, applied here to Morse.
+
+</details>
+
 ## Status
 
 **Working.** The model trains, evaluates, exports to ONNX, and runs live off a
