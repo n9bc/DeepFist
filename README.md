@@ -1,3 +1,5 @@
+![DeepFist neural Morse code decoder](docs/deepfist-banner-fusion-morse-key.png)
+
 # DeepFist
 
 A clean-room, self-trained neural network **CW (Morse code) decoder**, and a
