@@ -1,12 +1,12 @@
 # DeepFist
 
-A clean-room, self-trained neural network **CW (Morse code) decoder** — and a
+A clean-room, self-trained neural network **CW (Morse code) decoder**, and a
 live, on-screen **copy display** that reads real off-air CW like a CW reader.
 
 DeepFist decodes Morse the way modern speech recognition works:
 `audio → conditioning → spectrogram → CNN + CTC → text`. Instead of hand-written
 timing rules, it is trained on synthetically generated CW degraded with noise,
-fading (QSB), and interference, then adapted on real off-air recordings — so it
+fading (QSB), and interference, then adapted on real off-air recordings, so it
 stays readable on weak, messy, real-world signals where threshold decoders fall
 apart.
 
@@ -16,7 +16,7 @@ empty frequency instead of hallucinating text.
 <details>
 <summary>Why "DeepFist"? (a confession)</summary>
 
-In ham radio, your "fist" is your personal Morse rhythm — the way you, and only
+In ham radio, your "fist" is your personal Morse rhythm: the way you, and only
 you, send. This project uses deep learning to read fists off the air. Deep
 Learning on your fist. DeepFist. Seemed obvious at the time.
 
@@ -32,7 +32,7 @@ stubborn to rename the repo now.
 radio over TCI. On real ARRL code-practice audio (198 clips, 10–40 WPM) the
 champion model copies plain text at **~7% character error rate overall**,
 space-normalized, with per-speed variance from ~3% to ~17%. Clean copy of
-arbitrary *hand-sent* fists is the open frontier — see [`HANDOFF.md`](HANDOFF.md).
+arbitrary *hand-sent* fists is the open frontier; see [`HANDOFF.md`](HANDOFF.md).
 
 > Trained weights are **not** committed (the `runs/` directory and `*.pt` files
 > are git-ignored to keep the repo light). You train your own model, or obtain a
@@ -62,7 +62,7 @@ soundcard-based live decoder additionally needs `sounddevice`
 
 ## Quick start
 
-### Live decode from a radio (TCI) — the flagship
+### Live decode from a radio (TCI), the flagship
 
 Streams RX audio from an SDR that speaks TCI (Lyra / ExpertSDR3 on
 `ws://127.0.0.1:40001`, Thetis on `:50001`), and streams decoded text to the
@@ -73,13 +73,13 @@ python scripts/tci_decode.py --ckpt path/to/model.pt
 ```
 
 What it does automatically:
-- **Squelch** — an in-band *keying* detector (`tools/squelch.py`). Dead air and
+- **Squelch**: an in-band *keying* detector (`tools/squelch.py`). Dead air and
   the receiver's AGC tone score low; only genuinely keyed CW opens the gate, so
   no characters are printed on an empty frequency. Tune with `--squelch <n>`
   (default 12; higher = stricter).
-- **De-spike** — an impulse-noise blanker (`tools/despike.py`) that removes
+- **De-spike**: an impulse-noise blanker (`tools/despike.py`) that removes
   static crashes before decoding. On by default; `--no-despike` to disable.
-- **Conditioning** — AGC → tone-lock → narrow band-pass → re-center to 600 Hz,
+- **Conditioning**: AGC → tone-lock → narrow band-pass → re-center to 600 Hz,
   the front-end the model was trained with (mandatory for good copy).
 
 Useful flags: `--uri`, `--rx`, `--window` (context seconds, default 6),
@@ -97,7 +97,7 @@ DEEPFIST_CONDITION=1 python tools/eval_real_session.py \
 ```
 
 Optional: `--despike` (impulse blank each window), `--tempo <wpm>` (speed-warp;
-off by default and generally not recommended — see HANDOFF §18.24), `--norm-peak`.
+off by default and generally not recommended, see HANDOFF §18.24), `--norm-peak`.
 
 ### Capture off-air audio from the radio
 
@@ -179,7 +179,7 @@ as a *conceptual reference*, never copying its code or trained weights.
 
 ## License
 
-**GPL-3.0-or-later** — see [`LICENSE`](LICENSE). Matches
+**GPL-3.0-or-later**, see [`LICENSE`](LICENSE). Matches
 [Lyra-SDR](https://github.com/N8SDR1/Lyra-SDR-cpp), DeepFist's primary host
 application, and the wider ham-software tradition (fldigi, WSJT-X). Relicensed
 from MIT on 2026-07-18 while the sole-author history made that a clean switch.
