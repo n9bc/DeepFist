@@ -13,6 +13,19 @@ apart.
 **Hard rule:** no signal energy → no characters. The decoder stays silent on an
 empty frequency instead of hallucinating text.
 
+<details>
+<summary>Why "DeepFist"? (a confession)</summary>
+
+In ham radio, your "fist" is your personal Morse rhythm — the way you, and only
+you, send. This project uses deep learning to read fists off the air. Deep
+Learning on your fist. DeepFist. Seemed obvious at the time.
+
+I didn't clock how it sounded out loud until I announced the project at the
+dinner table. My wife just stared at me. My son lost it laughing. I'm too
+stubborn to rename the repo now.
+
+</details>
+
 ## Status
 
 **Working.** The model trains, evaluates, exports to ONNX, and runs live off a
@@ -163,21 +176,6 @@ DeepFist is **inspired by** e04's excellent
 can beat traditional decoders in noise. DeepCW is licensed **AGPL-3.0-only**,
 which is why DeepFist is a fresh, independent implementation: DeepCW is used only
 as a *conceptual reference*, never copying its code or trained weights.
-
-## Naming
-
-<details>
-<summary>Why "DeepFist"? (a confession)</summary>
-
-In ham radio, your "fist" is your personal Morse rhythm — the way you, and only
-you, send. This project uses deep learning to read fists off the air. Deep
-Learning on your fist. DeepFist. Seemed obvious at the time.
-
-I didn't clock how it sounded out loud until I announced the project at the
-dinner table. My wife just stared at me. My son lost it laughing. I'm too
-stubborn to rename the repo now.
-
-</details>
 
 ## License
 
